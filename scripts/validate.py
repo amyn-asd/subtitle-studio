@@ -16,7 +16,8 @@ def main():
     parser.add_argument("--start", type=float, default=0)
     parser.add_argument("--seconds", type=float, default=120)
     parser.add_argument("--full", action="store_true")
-    parser.add_argument("--recognition-only", action="store_true")
+    parser.add_argument("--model", choices=["turbo", "large"], default="turbo")
+    parser.add_argument("--original-audio", action="store_true", help="Disable the recommended audio enhancements")
     args = parser.parse_args()
     server = json.loads((DATA / "server.json").read_text())
     client = httpx.Client(base_url=f"http://127.0.0.1:{server['port']}/api", headers={"X-Studio-Token":server["token"]}, timeout=300)
@@ -27,7 +28,7 @@ def main():
         project = response.json()
         tracks = [t["stream_index"] for t in project["media"]["audio_tracks"]]
         response = client.post(f"/projects/{project['id']}/jobs", json={"tracks":tracks,"settings":{
-            "preset":"accurate","recheck":not args.recognition_only,"debate":not args.recognition_only,"start_seconds":0 if args.full else args.start,
+            "preset":"fast" if args.model == "turbo" else "accurate","enhance_audio":not args.original_audio,"start_seconds":0 if args.full else args.start,
             "limit_seconds":None if args.full else args.seconds}})
         response.raise_for_status()
         job = response.json()
@@ -60,10 +61,10 @@ def main():
                   "processed_seconds":project["media"]["duration"] if args.full else args.seconds,
                   "wall_seconds":round(time.time()-started,2),"status":job["status"],"error":job.get("error"),
                   "peak_gpu_total_mb":peak,"cue_count":len(cues),"languages":sorted({c["language"] for c in cues}),
-                  "flagged":sum(bool(c["flags"]) for c in cues),"debates":sum(bool(c.get("decision")) for c in cues),
-                  "alternatives_selected":sum(c["text"]!=c["raw_text"] for c in cues),"exports":export_paths,"warnings":job["warnings"]}
+                  "flagged":sum(bool(c["flags"]) for c in cues),
+                  "manual_edits":sum(bool(c.get("edited")) for c in cues),"exports":export_paths,"warnings":job["warnings"]}
         results.append(result)
-        output = DATA / "validation" / ("recognition-only-run.json" if args.recognition_only else "full-run.json" if args.full else "sample-run.json")
+        output = DATA / "validation" / ("full-run.json" if args.full else "sample-run.json")
         output.parent.mkdir(parents=True,exist_ok=True)
         output.write_text(json.dumps(results,ensure_ascii=False,indent=2),encoding="utf-8")
         print(json.dumps({k:v for k,v in result.items() if k not in ("exports","error","warnings")}),flush=True)

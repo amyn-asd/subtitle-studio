@@ -12,8 +12,6 @@ AUDIO_VERSION = 1
 AUDIO_PROFILES = {
     "original": "",
     "level": "highpass=f=60,dynaudnorm=f=250:g=7:p=0.9:m=6:r=0.12",
-    "gentle": "highpass=f=60,afftdn=nr=6:nf=-50:tn=1:gs=3,dynaudnorm=f=250:g=7:p=0.9:m=6:r=0.12",
-    "speech": "highpass=f=80,lowpass=f=7500,afftdn=nr=9:nf=-45:tn=1:gs=5,dynaudnorm=f=250:g=7:p=0.9:m=6:r=0.12",
 }
 
 

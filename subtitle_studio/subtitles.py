@@ -4,16 +4,8 @@ import hashlib
 import html
 import re
 import textwrap
-import unicodedata
 from pathlib import Path
 from .types import TRANSLATION_VERSION
-
-
-def same_spoken_words(first: str, second: str) -> bool:
-    def tokens(text):
-        text = unicodedata.normalize("NFKC", text).casefold().replace("’", "'")
-        return re.findall(r"[^\W_]+(?:'[^\W_]+)*", text)
-    return bool(tokens(first)) and tokens(first) == tokens(second)
 
 
 def timestamp(seconds: float) -> str:
@@ -69,8 +61,8 @@ def parse_srt(text: str, pid: str, track: int, language: str, codec: str) -> lis
             raise ValueError("The extracted subtitle has an invalid time interval")
         cues.append({"id": stable_id(pid, track, start, index), "track": track, "start": start, "end": end,
                      "text": plain, "raw_text": plain, "styled_text": raw, "language": language,
-                     "words": [], "flags": [], "reviewed": False, "edited": False, "candidates": [],
-                     "decision": None, "verification": f"Imported from embedded {codec.upper()} subtitles",
+                     "words": [], "flags": [], "reviewed": False, "edited": False,
+                     "verification": f"Imported from embedded {codec.upper()} subtitles",
                      "source_kind": "embedded"})
     return cues
 
@@ -107,9 +99,7 @@ def group_words(pid: str, track: int, words: list[dict]) -> list[dict]:
                "start": group[0]["start"], "end": max(group[0]["start"] + .12, group[-1]["end"]),
                "text": text, "raw_text": text, "language": group[0]["language"], "words": group,
                "flags": sorted(set(flags)), "reviewed": False, "edited": False,
-               "language_hints": sorted({w["language_hint"] for w in group if w.get("language_hint")}),
-               "candidates": [{"id": "primary", "text": text, "engine": "Whisper", "source": "Original audio"}],
-               "decision": None}
+               "language_hints": sorted({w["language_hint"] for w in group if w.get("language_hint")})}
         cues.append(cue)
     return cues
 

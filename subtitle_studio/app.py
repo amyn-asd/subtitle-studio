@@ -27,7 +27,7 @@ from .subtitle_formats import cue_source, preview_audio
 from .models import discover_existing, model_ready, status as model_status, HF_MODELS, OLLAMA_MODELS, ollama
 from .storage import Store
 from .subtitles import srt, atomic_text
-from .types import ProbeRequest, JobRequest, CueEdit, ExportRequest, PlayRequest, TRANSLATION_VERSION, SubtitleImportRequest, RemuxRequest, ProjectContext
+from .types import ProbeRequest, JobRequest, CueEdit, ExportRequest, PlayRequest, TRANSLATION_VERSION, SubtitleImportRequest, RemuxRequest
 from .filesystem import list_files
 from .transcripts import transcript_blocks, transcript_text
 
@@ -179,7 +179,7 @@ def create_app(store: Store | None = None, manager=None, token: str | None = Non
     @app.post("/api/projects")
     def create_project(body: ProbeRequest):
         project = store.create_project(probe(body.path.strip().strip('"')))
-        if project["media"]["audio_tracks"] and model_ready("whisper") and any(t["detection"] == "pending" for t in project["media"]["audio_tracks"]):
+        if project["media"]["audio_tracks"] and (model_ready("turbo") or model_ready("whisper")) and any(t["detection"] == "pending" for t in project["media"]["audio_tracks"]):
             if not any(j["kind"] == "scan" and j["status"] in ("queued", "running") for j in project["jobs"]):
                 jobs.create(project["id"], "scan")
                 project = store.project(project["id"])
@@ -188,14 +188,6 @@ def create_app(store: Store | None = None, manager=None, token: str | None = Non
     @app.get("/api/projects/{pid}")
     def project(pid: str):
         return load_project(pid)
-
-    @app.patch("/api/projects/{pid}/context")
-    def context(pid: str, body: ProjectContext):
-        project = store.project(pid)
-        if any(j["kind"] == "transcribe" and j["status"] in ("queued", "running", "pausing") for j in project["jobs"]):
-            raise ValueError("Finish or pause transcription before changing its review context")
-        store.update_context(pid, body.review_context)
-        return store.project(pid)
 
     @app.post("/api/projects/{pid}/subtitles/import")
     def import_subtitles(pid: str, body: SubtitleImportRequest):
@@ -274,8 +266,8 @@ def create_app(store: Store | None = None, manager=None, token: str | None = Non
         media = store.project(pid)["media"]
         if not media["audio_tracks"]:
             raise ValueError("This file has no audio tracks")
-        if not model_ready("whisper"):
-            raise ValueError("Install the transcription model in Models first")
+        if not (model_ready("turbo") or model_ready("whisper")):
+            raise ValueError("Install Whisper Turbo or large-v3 in Models first")
         return jobs.create(pid, "scan")
 
     @app.post("/api/projects/{pid}/jobs")
@@ -290,19 +282,11 @@ def create_app(store: Store | None = None, manager=None, token: str | None = Non
         if settings["language"] and settings["language"] not in LANGUAGE_CODES:
             raise ValueError("Unsupported transcription language")
         required = ["turbo" if settings["preset"] == "fast" else "whisper"]
-        if settings["recheck"]:
-            required.append("whisper")
         missing = [key for key in required if not model_ready(key)]
-        if settings["debate"]:
-            ollama.start()
-            if not ollama.ready("context"):
-                missing.append("context")
         if missing:
             raise ValueError("Install these models first: " + ", ".join(missing))
         if processing(pid):
             raise ValueError("Finish or pause current processing before transcribing this project")
-        settings["review_context"] = settings["review_context"] if settings["review_context"] is not None else project["review_context"]
-        store.update_context(pid, settings["review_context"])
         return jobs.create(pid, "transcribe", settings, body.tracks)
 
     @app.get("/api/jobs/{jid}")
@@ -378,18 +362,6 @@ def create_app(store: Store | None = None, manager=None, token: str | None = Non
         if any(key in changes for key in ("text", "start", "end")):
             changes["edited"] = True
         return store.update_cue(pid, cid, changes)
-
-    @app.post("/api/projects/{pid}/cues/{cid}/candidate")
-    def accept_candidate(pid: str, cid: str, body: dict):
-        cue = next((c for c in store.cues(pid) if c["id"] == cid), None)
-        if not cue:
-            raise KeyError("Cue not found")
-        selected = next((c for c in cue["candidates"] if c["id"] == body.get("candidate_id")), None)
-        if not selected:
-            raise ValueError("Unknown candidate")
-        return store.update_cue(pid, cid, {"text": selected["text"], "edited": True, "reviewed": True,
-                                         "language": selected.get("language", cue["language"]),
-                                         "words": cue["words"] if selected["id"] == "primary" else []})
 
     @app.post("/api/projects/{pid}/translate")
     def translation(pid: str, body: dict):

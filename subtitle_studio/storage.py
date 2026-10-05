@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 
 from .config import DATA, initialize
-from .types import TRANSLATION_VERSION
+from .types import TRANSLATION_VERSION, Settings
 
 
 def encode(value) -> str:
@@ -30,8 +30,27 @@ class Store:
                 CREATE TABLE IF NOT EXISTS exports(project_id TEXT NOT NULL, track INTEGER NOT NULL, language TEXT NOT NULL, path TEXT NOT NULL, PRIMARY KEY(project_id,track,language));
             """)
             db.execute("BEGIN IMMEDIATE")
-            if "review_context" not in {r["name"] for r in db.execute("PRAGMA table_info(projects)")}:
-                db.execute("ALTER TABLE projects ADD COLUMN review_context TEXT NOT NULL DEFAULT ''")
+            if db.execute("PRAGMA user_version").fetchone()[0] < 3:
+                if "review_context" in {r["name"] for r in db.execute("PRAGMA table_info(projects)")}:
+                    db.execute("ALTER TABLE projects DROP COLUMN review_context")
+                for row in db.execute("SELECT id,body FROM cues").fetchall():
+                    cue = json.loads(row["body"])
+                    cue.pop("candidates", None)
+                    cue.pop("decision", None)
+                    cue["flags"] = ["Previously revised wording; check audio" if flag == "AI selected alternative" else flag
+                                    for flag in cue.get("flags", [])]
+                    if cue.get("source_kind") != "embedded":
+                        cue.pop("verification", None)
+                    db.execute("UPDATE cues SET body=? WHERE id=?", (encode(cue), row["id"]))
+                for row in db.execute("SELECT id,body FROM jobs").fetchall():
+                    job = json.loads(row["body"])
+                    if job["kind"] == "transcribe":
+                        settings = job.get("settings") or {}
+                        if "enhance_audio" not in settings and "audio_profile" in settings:
+                            settings["enhance_audio"] = settings["audio_profile"] != "original"
+                        job["settings"] = Settings.model_validate(settings).model_dump()
+                        db.execute("UPDATE jobs SET body=? WHERE id=?", (encode(job), row["id"]))
+                db.execute("PRAGMA user_version=3")
             columns = {r["name"] for r in db.execute("PRAGMA table_info(translations)")}
             if "version" not in columns:
                 db.execute("ALTER TABLE translations ADD COLUMN version INTEGER NOT NULL DEFAULT 0")
@@ -68,7 +87,7 @@ class Store:
                 raise KeyError("Project not found")
             jobs = [json.loads(r[0]) for r in db.execute("SELECT body FROM jobs WHERE project_id=? ORDER BY updated DESC", (pid,))]
             counts = [dict(r) for r in db.execute("SELECT track,COUNT(*) AS count FROM cues WHERE project_id=? GROUP BY track", (pid,))]
-        return {"id": pid, "media": json.loads(row["media"]), "created": row["created"], "review_context": row["review_context"], "jobs": jobs, "cue_counts": counts}
+        return {"id": pid, "media": json.loads(row["media"]), "created": row["created"], "jobs": jobs, "cue_counts": counts}
 
     def projects(self) -> list[dict]:
         with self.connect() as db:
@@ -78,11 +97,6 @@ class Store:
     def update_media(self, pid: str, media: dict):
         with self.connect() as db:
             db.execute("UPDATE projects SET media=? WHERE id=?", (encode(media), pid))
-
-    def update_context(self, pid: str, context: str):
-        with self.connect() as db:
-            if db.execute("UPDATE projects SET review_context=? WHERE id=?", (context, pid)).rowcount != 1:
-                raise KeyError("Project not found")
 
     def save_job(self, job: dict):
         with self.connect() as db:
@@ -125,16 +139,13 @@ class Store:
                     cue.update({k: old[k] for k in ("text", "start", "end", "reviewed", "edited") if k in old})
                 db.execute("INSERT INTO cues VALUES(?,?,?,?,?)", (cue["id"], pid, track, cue["start"], encode(cue)))
 
-    def update_cue(self, pid: str, cid: str, changes: dict, *, automated=False, expected_text=None) -> dict:
+    def update_cue(self, pid: str, cid: str, changes: dict) -> dict:
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT body FROM cues WHERE project_id=? AND id=?", (pid, cid)).fetchone()
             if not row:
                 raise KeyError("Cue not found")
             cue = json.loads(row[0])
-            # Human edits win even when an AI request was already in flight.
-            if automated and (cue.get("edited") or cue.get("reviewed") or cue["text"] != expected_text):
-                return cue
             cue.update(changes)
             if not cue["text"].strip() or cue["end"] <= cue["start"]:
                 raise ValueError("A subtitle needs text and an end time after its start time.")

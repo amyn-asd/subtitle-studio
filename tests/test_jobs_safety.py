@@ -24,13 +24,14 @@ def test_simultaneous_text_save_and_review_keep_both_changes(tmp_path):
             assert saved["text"] == text and saved["reviewed"]
 
 
-def test_inflight_ai_result_cannot_overwrite_a_human_edit(tmp_path):
+def test_inflight_recognition_cannot_overwrite_a_human_edit(tmp_path):
     store = Store(tmp_path / "studio.sqlite")
     cue = group_words("p", 1, [{"word":" Original.","start":1,"end":2,"language":"en"}])[0]
     store.replace_cues("p", 1, [cue])
     store.update_cue("p",cue["id"],{"text":"Human correction.","edited":True})
-    result = store.update_cue("p",cue["id"],{"text":"AI alternative."},automated=True,expected_text="Original.")
-    assert result["text"] == "Human correction."
+    refreshed = {**cue, "text": "New recognition."}
+    store.replace_cues("p", 1, [refreshed])
+    assert store.cues("p")[0]["text"] == "Human correction."
     assert store.cues("p")[0]["raw_text"] == "Original."
 
 
@@ -38,19 +39,3 @@ def test_reference_metrics_use_unicode_and_count_insertions():
     assert distance(units("One two.","en"),units("One three two!","en")) == 1
     assert units("عربي كی\u200cي", "fa") == ["عربی", "کی", "ی"]
     assert distance(units("今日は。","ja"),units("今日です。","ja")) == 2
-
-
-def test_punctuation_only_recheck_keeps_original_words_and_review_flag(tmp_path):
-    from subtitle_studio.jobs import Jobs
-    store = Store(tmp_path / "punctuation.sqlite")
-    cue = group_words("p", 1, [{"word":" Oh, hello!","start":1,"end":2,"language":"en","flags":["Uncertain recognition"]}])[0]
-    store.replace_cues("p",1,[cue])
-    manager = Jobs(store)
-    def worker(job, stage, manifest, callback):
-        callback({"type":"recheck","result":{"cue_id":cue["id"],"text":"oh hello.","language":"en","engine":"test","candidate_id":"qwen"}})
-    manager.worker = worker
-    manager._recheck({"id":"j","project_id":"p","tracks":[1],"settings":{},"warnings":[],"kind":"transcribe"},{})
-    result = store.cues("p")[0]
-    assert result["text"] == "Oh, hello!" and len(result["candidates"]) == 1
-    assert result["flags"] and not result["reviewed"]
-    manager.pool.shutdown()

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import os
@@ -11,9 +10,9 @@ from pathlib import Path
 
 import numpy as np
 
-from .config import DATA, MODELS
+from .config import MODELS
 from .media import audio_window
-from .models import model_path, model_ready, model_revision
+from .models import model_path, model_ready
 from .subtitles import atomic_text
 from .audio_processing import prepare_track
 from .speech_coverage import uncovered_speech, repetitive_text
@@ -76,7 +75,7 @@ class Detector:
 def whisper_model(settings):
     cuda()
     from faster_whisper import WhisperModel, BatchedInferencePipeline
-    key = "turbo" if settings.get("preset") == "fast" else "whisper"
+    key = "turbo" if settings.get("preset", "fast") == "fast" else "whisper"
     if not model_ready(key):
         raise RuntimeError(f"Download {key} in Models before processing.")
     model = WhisperModel(str(model_path(key)), device="cuda", compute_type="float16", cpu_threads=4, num_workers=1)
@@ -140,7 +139,7 @@ def segment_words(segment, origin, duration, language, index, recovered=False):
     return result
 
 
-def recover_speech(model, audio, existing, detector, language, origin=0):
+def recover_speech(model, audio, existing, detector, language, origin=0, progress=None):
     duration = len(audio)/16000
     speech = detector.speech(np.asarray(audio), coverage=True)
     local_words = [{**w,"start":w["start"]-origin,"end":w["end"]-origin} for w in existing]
@@ -165,15 +164,13 @@ def recover_speech(model, audio, existing, detector, language, origin=0):
                 picked = []
         evidence.append({**gap,"retried":retry,"text":"".join(w["word"] for w in picked)})
         additions.extend({**w,"start":w["start"]+origin,"end":w["end"]+origin} for w in picked)
-        emit("progress",progress=.85+.15*(index+1)/max(1,len(gaps)),
+        (progress or emit)("progress",progress=.85+.15*(index+1)/max(1,len(gaps)),
              message=f"Recovering audible speech {index+1}/{len(gaps)}")
     return additions,evidence
 
 
 def primary(manifest):
     settings, media = manifest["settings"],manifest["media"]
-    model,pipeline = whisper_model(settings)
-    detector = Detector()
     cache = Path(manifest["cache"]); cache.mkdir(parents=True,exist_ok=True)
     beginning = min(settings.get("start_seconds",0),media["duration"])
     ending = min(media["duration"],beginning+(settings.get("limit_seconds") or media["duration"]))
@@ -182,10 +179,22 @@ def primary(manifest):
     # Explicit timestamp-token decoding and padded speech boundaries are needed
     # for complete recognition. Word timestamps alone do not enable that mode.
     chunk_length = min(settings.get("chunk_seconds",16),16)
+    profile = "level" if settings.get("enhance_audio", settings.get("audio_profile", "level") != "original") else "original"
+    # Prepare every selected track before loading CUDA or running recognition.
+    prepared_paths = {}
+    for track_number, track in enumerate(manifest["tracks"]):
+        path = cache / f"audio-{track}.f32"
+        emit("progress", progress=.05*track_number/len(manifest["tracks"]), stage="preparing_audio",
+             message=f"Preparing audio {track}" + (" with recommended enhancements" if profile == "level" else " without enhancements"))
+        audio = prepare_track(media["path"], track, beginning, ending-beginning, path, profile)
+        del audio
+        prepared_paths[track] = path
+    emit("progress", progress=.05, stage="transcribing", message="Loading the selected recognition model")
+    model,pipeline = whisper_model(settings)
+    detector = Detector()
+    primary_emit = emit
     for track_number,track in enumerate(manifest["tracks"]):
-        emit("progress",progress=0,message=f"Preparing audio {track} ({settings.get('audio_profile','level')})")
-        audio = prepare_track(media["path"],track,beginning,ending-beginning,
-            cache/f"audio-{track}.f32",settings.get("audio_profile","level"))
+        audio = np.memmap(prepared_paths[track], dtype="<f4", mode="r", shape=(round((ending-beginning)*16000),))
         marker = cache/f"track-{track}-primary.json"
         saved = json.loads(marker.read_text(encoding="utf-8")) if marker.exists() else None
         all_words, files = [], []
@@ -193,7 +202,7 @@ def primary(manifest):
             for filename in saved["files"]:
                 chunk = json.loads((cache/filename).read_text(encoding="utf-8"))
                 all_words.extend(chunk["words"])
-                emit("chunk",chunk=chunk,progress=.85*(track_number+1)/len(manifest["tracks"]),message="Reading saved recognition")
+                emit("chunk",chunk=chunk,progress=.05+.95*.85*(track_number+1)/len(manifest["tracks"]),message="Reading saved recognition")
         else:
             # The generator yields completed segments for immediate checkpointing.
             # A partial resume reruns deterministic decoding and reuses saved
@@ -241,7 +250,7 @@ def primary(manifest):
                             "language":language,"score":info.language_probability}],"raw_text":segment.text}
                     atomic_text(file,json.dumps(chunk,ensure_ascii=False))
                 files.append(filename); all_words.extend(chunk["words"])
-                emit("chunk",chunk=chunk,progress=.85*(track_number+segment.end/(ending-beginning))/len(manifest["tracks"]),
+                emit("chunk",chunk=chunk,progress=.05+.95*.85*(track_number+segment.end/(ending-beginning))/len(manifest["tracks"]),
                      message=f"Audio {track}: {int(beginning+segment.end)} / {int(ending)} seconds")
             atomic_text(marker,json.dumps({"complete":True,"files":files}))
         if settings.get("recover_speech",True):
@@ -249,105 +258,28 @@ def primary(manifest):
             if file.exists():
                 recovery=json.loads(file.read_text(encoding="utf-8"))
             else:
-                words,evidence=recover_speech(model,audio,all_words,detector,settings.get("language"),beginning)
+                def recovery_progress(kind, **data):
+                    if "progress" in data:
+                        data["progress"] = .05+.95*(track_number+data["progress"])/len(manifest["tracks"])
+                        data["stage"] = "transcribing"
+                    primary_emit(kind, **data)
+                # The callback keeps progress monotonic across multiple selected tracks.
+                words,evidence=recover_speech(model,audio,all_words,detector,settings.get("language"),beginning,
+                    progress=recovery_progress)
                 recovery={"track":track,"start":beginning,"end":ending,"words":words,"languages":[],"evidence":evidence}
                 atomic_text(file,json.dumps(recovery,ensure_ascii=False))
-            emit("chunk",chunk=recovery,progress=(track_number+1)/len(manifest["tracks"]),
+            emit("chunk",chunk=recovery,progress=.05+.95*(track_number+1)/len(manifest["tracks"]),
                  message=f"Recovered {len(recovery['words'])} additional word entries in audio {track}")
         del audio
 
 
-def recheck(manifest, use_whisper=True):
-    settings, media = manifest["settings"], manifest["media"]
-    cases = manifest["cases"]
-    if not cases:
-        return
-    model, _ = whisper_model({**settings, "preset": "accurate"})
-    cache = Path(manifest["cache"]) / "large-rechecks"
-    cache.mkdir(parents=True, exist_ok=True)
-    beginning = min(settings.get("start_seconds", 0), media["duration"])
-    ending = min(media["duration"], beginning + (settings.get("limit_seconds") or media["duration"]))
-    prepared = {}
-    for index, case in enumerate(cases):
-        cue = case["cue"]
-        signature = hashlib.sha256(json.dumps({"case": case, "revision": model_revision("whisper"),
-            "audio_profile": settings.get("audio_profile", "level"), "protocol": 2},
-            sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
-        file = cache / f"{cue['id']}-{signature}.json"
-        if file.exists():
-            result = json.loads(file.read_text(encoding="utf-8"))
-        else:
-            track = cue["track"]
-            if track not in prepared:
-                prepared[track] = prepare_track(media["path"], track, beginning, ending - beginning,
-                    Path(manifest["cache"]) / f"audio-{track}.f32", settings.get("audio_profile", "level"))
-            start = max(beginning, cue["start"] - .12)
-            end = min(ending, cue["end"] + .12)
-            audio = np.asarray(prepared[track][round((start-beginning)*16000):round((end-beginning)*16000)])
-            neighbors = case.get("neighbors", [])
-            context = "\n".join(n["text"] for n in neighbors if not n.get("flags") or n.get("reviewed"))[-1500:]
-            segments, info = model.transcribe(audio, language=settings.get("language"),
-                             word_timestamps=True, beam_size=5, condition_on_previous_text=False, temperature=(0, .2),
-                             initial_prompt=context or None, vad_filter=True)
-            text = "".join(segment.text for segment in segments).strip()
-            result = {"cue_id": cue["id"], "text": text, "engine": "Whisper large-v3 contextual retry",
-                      "candidate_id": "whisper_retry", "language": info.language, "start": start, "end": end}
-            atomic_text(file, json.dumps(result, ensure_ascii=False))
-        emit("recheck", result=result, progress=(index + 1) / len(cases), message=f"Checking uncertain speech {index + 1}/{len(cases)}")
-
-
-def align(manifest):
-    import torch
-    import whisperx
-    import whisperx.alignment as alignment_module
-    # Cue boundaries already define the subtitle span. Avoid downloading an
-    # unrelated sentence tokenizer, and retain the complete recognized text.
-    class WholeCue:
-        def span_tokenize(self, text):
-            return [(0, len(text))]
-    alignment_module.nltk_load = lambda _: WholeCue()
-    torch.set_num_threads(4)
-    by_language = {}
-    for cue in manifest["cues"]:
-        by_language.setdefault(cue["language"], []).append(cue)
-    done = 0
-    for language, cues in by_language.items():
-        try:
-            from whisperx.alignment import DEFAULT_ALIGN_MODELS_HF
-            repository = DEFAULT_ALIGN_MODELS_HF.get(language)
-            local_model = None
-            if repository:
-                snapshots = MODELS / "alignment" / ('models--' + repository.replace('/', '--')) / 'snapshots'
-                if snapshots.is_dir():
-                    for snapshot in sorted(snapshots.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
-                        if ((snapshot/'config.json').is_file() and (snapshot/'vocab.json').is_file()
-                            and ((snapshot/'pytorch_model.bin').is_file() or (snapshot/'model.safetensors').is_file())):
-                            local_model = str(snapshot)
-                            break
-            model, metadata = whisperx.load_align_model(language_code=language, device="cpu",
-                model_name=local_model, model_dir=str(MODELS / "alignment"))
-        except Exception as exc:
-            emit("warning", message=f"Word alignment unavailable for {language}: {exc}")
-            continue
-        for cue in cues:
-            audio = audio_window(manifest["media"]["path"], cue["track"], cue["start"], cue["end"] - cue["start"])
-            result = whisperx.align([{"start": 0, "end": len(audio) / 16000, "text": cue["text"]}], model, metadata, audio, "cpu")
-            words = [{**word, "start": word["start"] + cue["start"], "end": word["end"] + cue["start"]}
-                     for word in result.get("word_segments", []) if "start" in word and "end" in word]
-            done += 1
-            emit("alignment", cue_id=cue["id"], words=words, progress=done / max(1, len(manifest["cues"])))
-
-
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--stage", required=True, choices=["scan", "primary", "recheck", "recheck_whisper", "align"])
+    parser.add_argument("--stage", required=True, choices=["scan", "primary"])
     parser.add_argument("--manifest", type=Path, required=True)
     args = parser.parse_args()
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
-    if args.stage == "recheck_whisper":
-        recheck(manifest, True)
-    else:
-        globals()[args.stage](manifest)
+    globals()[args.stage](manifest)
     emit("done")
 
 

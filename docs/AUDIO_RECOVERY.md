@@ -2,11 +2,11 @@
 
 The previous recognition path dropped substantial dialogue in a Persian video. Comparing Turbo with a supplied transcript exposed the problem: the exported SRT had 1,496 normalized words against 2,664 in the reference.
 
-The implementation now combines speech level adjustment, explicit timestamp-token decoding, padded speech boundaries of up to 16 seconds, and a second audio pass over uncovered speech. The same selected Whisper model handles recovery. There is no text reviewer, reference prompt or reference-based output rewriting in this path.
+The implementation now combines speech level adjustment, explicit timestamp-token decoding, padded speech boundaries of up to 16 seconds, and a second audio pass over uncovered speech. The same selected Whisper model handles recovery. The supplied reference is used only to evaluate completed output.
 
 ## Measured result
 
-Full 16-minute 3-second video, Whisper Turbo FP16, RTX 5080 with 16 GB VRAM. Rechecks, context reviewers and translation disabled; forced Persian. The supplied transcript was used only to evaluate completed outputs.
+Full 16-minute 3-second video, Whisper Turbo FP16, RTX 5080 with 16 GB VRAM. Transcription only; forced Persian. The supplied transcript was used only to evaluate completed outputs.
 
 | Metric | Previous output | Integrated output |
 | --- | ---: | ---: |
@@ -21,20 +21,30 @@ The integrated run took 39.1 seconds including model imports/loading, audio prep
 
 A raw recovery experiment reached 2,654 words, but included repeated artifacts. Retrying those intervals with more audio context improved the reference comparison; the integrated output is the reported 2,623-word version. Matching a word count is insufficient to establish accuracy. The supplied reference can itself contain errors, and spelling, spacing, overlapping voices and damaged audio still affect the result.
 
-## Controls
+## One recommended option
 
-- **Even out quiet and loud speech** is the default. It uses a mild high-pass filter and dynamic level adjustment.
-- **Original audio** provides a comparison without signal processing.
-- **Light/stronger noise reduction** add FFT noise reduction. They are optional: neither outperformed level adjustment on this test.
-- **Recover missed speech** checks intervals with detected speech but no corresponding word coverage. It adds only audio-derived recognition results and flags them for review.
+**Audio enhancements — Recommended** is enabled by default. It uses a mild 60 Hz high-pass filter and dynamic level adjustment, preparing the audio before the recognition model loads. Turning it off retains original decoded audio with the required mono/16 kHz conversion. The interface offers no gain or noise-reduction tuning controls.
 
-Other tests included shorter/longer windows, stronger gain, denoising, VAD thresholds and slowed audio. Increasing the count sometimes increased errors; those combinations were not selected merely for their counts. No model weights were trained, downloaded or changed for these tests.
+Padded speech boundaries, timestamp-token decoding and same-model missed-speech recovery are built into transcription in both modes. Uncovered audible intervals are re-recognized; suspicious repetition receives wider audio context. The source video and its timing stay intact.
+
+Stronger filtering, varied window lengths, changed speech thresholds and slowed audio were tested during tuning. Their higher word counts sometimes increased errors, so the fixed recommended preparation uses the measured mild leveling method.
+
+### English filter comparison
+
+Same 5m 33s video, Turbo model/revision, forced English, 16-second windows, beam 5, batch 4, FP16 and missed-speech recovery. Only the audio profile changed; each mode used a fresh recognition cache. Reference: 1,365 normalized words.
+
+| Audio | Time | Output words | Substitutions | Deletions | Insertions | Word error |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Recommended preparation | 14.10 s | 1,375 | 33 | 14 | 24 | 5.20% |
+| Filters disabled | 14.29 s | 1,524 | 45 | 14 | 173 | 17.00% |
+
+Repeated extra phrases were substantially worse without preparation. These are single measured runs; the 0.19-second timing difference is not a stable speed ranking. Timing includes worker import/model loading, preparation, recognition and recovery; excludes probing, export and scoring. Reference spelling, number formatting and censoring differences also count as edits.
 
 ## Implementation
 
 Audio preparation streams 16 kHz mono float32 PCM to a local cache and reads it through a memory map. Long movies do not need a complete Python copy of their waveform. Silence is retained and input/output duration is checked, keeping subtitles on the video timeline. The preparation cache includes source fingerprint, stream, range, profile and processing version.
 
-Both primary recognition and recovery use actual audio. Recovery excludes already covered words and retries suspicious repetition with wider audio context. Cached completed segments and recovery results are reusable. A partial primary resume replays deterministic decoding up to saved segments, preserving completed results rather than seeking past an unfinished sentence. This can repeat some computation after interruption. Pipeline cache version 5 prevents older incomplete recognition results from being reused.
+Both primary recognition and recovery use actual audio. Recovery excludes already covered words and retries suspicious repetition with wider audio context. Cached completed segments and recovery results are reusable. A partial primary resume replays deterministic decoding up to saved segments, preserving completed results rather than seeking past an unfinished sentence. This can repeat some computation after interruption. Pipeline cache version 7 separates this workflow from older processing runs.
 
 The source media, reference text, model weights, timings and generated subtitles stay in ignored local storage. Generic settings and test code are the only repository additions.
 

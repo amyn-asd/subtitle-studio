@@ -1,39 +1,21 @@
 from __future__ import annotations
 
 from typing import Literal
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 TRANSLATION_VERSION = 2
 
 
 class Settings(BaseModel):
-    preset: Literal["accurate", "fast"] = "accurate"
+    preset: Literal["accurate", "fast"] = "fast"
     language: str | None = None
-    recheck: bool = True
-    debate: bool = True
-    review_agents: Literal[1, 2] = 2
-    audio_profile: Literal["original", "level", "gentle", "speech"] = "level"
+    enhance_audio: bool = True
     recover_speech: bool = True
     chunk_seconds: int = Field(default=16, ge=8, le=60)
     batch_size: int = Field(default=4, ge=1, le=16)
     start_seconds: float = Field(default=0, ge=0)
     limit_seconds: float | None = Field(default=None, gt=0)
     target_language: str | None = None
-    review_context: str | None = Field(default=None, max_length=4000)
-
-    @field_validator("review_context")
-    @classmethod
-    def strip_context(cls, value):
-        return value.strip() if value is not None else None
-
-
-class ProjectContext(BaseModel):
-    review_context: str = Field(max_length=4000)
-
-    @field_validator("review_context")
-    @classmethod
-    def strip_context(cls, value):
-        return value.strip()
 
 
 class ProbeRequest(BaseModel):

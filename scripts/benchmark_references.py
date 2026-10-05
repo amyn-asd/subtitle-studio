@@ -75,14 +75,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--noise-db", type=float, help="Also benchmark seeded white noise at this SNR")
     parser.add_argument("--languages", nargs="+", help="Limit the benchmark to language codes, such as en fa ja")
-    parser.add_argument("--recognition-only", action="store_true", help="Measure primary recognition without rechecks/discussion")
+    parser.add_argument("--model", choices=["turbo", "large"], default="turbo")
+    parser.add_argument("--original-audio", action="store_true", help="Disable the recommended audio enhancements")
     args = parser.parse_args()
     rows = json.loads((DATA / "references" / "references.json").read_text(encoding="utf-8"))
     server = json.loads((DATA / "server.json").read_text())
     client = httpx.Client(base_url=f"http://127.0.0.1:{server['port']}/api",
                          headers={"X-Studio-Token": server["token"]}, timeout=300)
     results = []
-    report = DATA / "validation" / ("reference-recognition-benchmark.json" if args.recognition_only else "reference-benchmark.json")
+    report = DATA / "validation" / ("reference-benchmark.json")
     report.parent.mkdir(parents=True, exist_ok=True)
     for snr in [None] + ([args.noise_db] if args.noise_db is not None else []):
         for language in sorted({r["language"] for r in rows}):
@@ -100,25 +101,24 @@ def main():
             started = time.monotonic()
             response = client.post(f"/projects/{project['id']}/jobs", json={
                 "tracks": [t["stream_index"] for t in project["media"]["audio_tracks"]],
-                "settings": {"preset": "accurate", "recheck": not args.recognition_only, "debate": not args.recognition_only}})
+                "settings": {"preset": "fast" if args.model == "turbo" else "accurate", "enhance_audio": not args.original_audio}})
             response.raise_for_status()
             wait(client, response.json()["id"])
             cues = client.get(f"/projects/{project['id']}/cues").json()
             reference = units(" ".join(r["reference"] for r in group), language)
             primary = units(" ".join(c["raw_text"] for c in cues), language)
-            reviewed = units(" ".join(c["text"] for c in cues), language)
+            output = units(" ".join(c["text"] for c in cues), language)
             result = {"language": language, "clips": len(group), "noise_snr_db": snr,
                       "metric": "CER" if language == "ja" else "WER", "reference_units": len(reference),
-                      "primary_errors": distance(reference, primary), "reviewed_errors": distance(reference, reviewed),
+                      "primary_errors": distance(reference, primary), "output_errors": distance(reference, output),
                       "detected_languages": sorted({c["language"] for c in cues}),
                       "cue_count": len(cues), "flagged": sum(bool(c["flags"]) for c in cues),
-                      "debates": sum(bool(c.get("decision")) for c in cues),
                       "wall_seconds": round(time.monotonic() - started, 2), "project_id": project["id"]}
-            for key in ("primary", "reviewed"):
+            for key in ("primary", "output"):
                 result[key + "_error_rate"] = round(result[key + "_errors"] / max(1, len(reference)), 4)
             results.append(result)
             report.write_text(json.dumps({"source": "google/fleurs test", "scope": "Three clips per language; small diagnostic sample",
-                                          "recognition_only": args.recognition_only,
+                                          "model": args.model, "enhance_audio": not args.original_audio,
                                           "results": results}, indent=2), encoding="utf-8")
             print(json.dumps(result), flush=True)
 

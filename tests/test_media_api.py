@@ -72,8 +72,8 @@ def test_api_auth_selection_edits_export_and_translation_staleness(multitrack, t
     project = client.post("/api/projects", json={"path":str(multitrack)}, headers=headers).json()
     pid = project["id"]
     assert len(project["media"]["audio_tracks"]) == 2
-    assert client.post(f"/api/projects/{pid}/jobs", headers=headers, json={"tracks":[0],"settings":{"recheck":False,"debate":False}}).status_code == 400
-    assert client.post(f"/api/projects/{pid}/jobs", headers=headers, json={"tracks":[2],"settings":{"recheck":False,"debate":False}}).status_code == 200
+    assert client.post(f"/api/projects/{pid}/jobs", headers=headers, json={"tracks":[0],"settings":{}}).status_code == 400
+    assert client.post(f"/api/projects/{pid}/jobs", headers=headers, json={"tracks":[2],"settings":{}}).status_code == 200
     cue = group_words(pid, 2, [{"word":" سلام.","start":1.3,"end":2.2,"language":"fa","flags":[],"chunk":0}])[0]
     store.replace_cues(pid,2,[cue])
     store.save_translation(pid,"en",cue,"Hello.")

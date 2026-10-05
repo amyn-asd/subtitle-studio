@@ -100,7 +100,9 @@ def test_partial_resume_reuses_completed_segments_and_keeps_range_offset(tmp_pat
         def language(self,audio):return None
     def prepared(path,track,start,duration,destination,profile):
         assert start==10 and duration==4
-        return np.zeros(64000,dtype=np.float32)
+        destination.parent.mkdir(parents=True,exist_ok=True)
+        np.zeros(64000,dtype=np.float32).tofile(destination)
+        return np.memmap(destination,dtype="<f4",mode="r",shape=(64000,))
     monkeypatch.setattr(module,'whisper_model',lambda settings:(object(),Pipeline()))
     monkeypatch.setattr(module,'Detector',Detector)
     monkeypatch.setattr(module,'prepare_track',prepared)

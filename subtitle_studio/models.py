@@ -16,11 +16,11 @@ from .media import NO_WINDOW
 from .subtitles import atomic_text
 
 HF_MODELS = {
-    "whisper": {"name": "Whisper large-v3", "repo": "Systran/faster-whisper-large-v3", "required": "model.bin", "size_gb": 3.1},
     "turbo": {"name": "Whisper turbo", "repo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo", "required": "model.bin", "size_gb": 1.6},
+    "whisper": {"name": "Whisper large-v3", "repo": "Systran/faster-whisper-large-v3", "required": "model.bin", "size_gb": 3.1},
     "lid": {"name": "107-language detector", "repo": "speechbrain/lang-id-voxlingua107-ecapa", "required": "embedding_model.ckpt", "size_gb": .1},
 }
-OLLAMA_MODELS = {"context": "qwen3.5:9b", "translation": "translategemma:12b"}
+OLLAMA_MODELS = {"translation": "translategemma:12b"}
 
 
 def model_path(key: str) -> Path:
@@ -166,7 +166,7 @@ class Ollama:
         self.start()
         payload = {"model": model, "messages": messages, "stream": False, "keep_alive": "10m",
                    "think": False, "options": {"temperature": 0,
-                       "num_ctx": 2048 if model == OLLAMA_MODELS["translation"] else 8192, "num_predict": 768}}
+                       "num_ctx": 2048, "num_predict": 768}}
         if schema:
             payload["format"] = schema
         with httpx.Client(timeout=240) as client:
@@ -223,5 +223,5 @@ def status() -> list[dict]:
     tags = ollama.tags()
     for key, tag in OLLAMA_MODELS.items():
         installed.append({"id": key, "name": tag, "ready": any(m["name"] == tag for m in tags),
-                          "size_gb": 7.6 if key == "context" else 8.1})
+                          "size_gb": 8.1})
     return installed
