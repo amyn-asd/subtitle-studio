@@ -1,7 +1,7 @@
 export type Track = {stream_index: number; audio_ordinal: number; channels: number; codec: string; title: string; detection: string; languages: {code: string; score?: number}[]};
 export type EmbeddedTrack = {stream_index:number;subtitle_ordinal:number;cue_track:number;codec:string;kind:'text'|'image'|'unknown';title:string;language:string;metadata_language:string;extract_extension:string;default:boolean;forced:boolean};
-export type Job = {id: string; kind: string; status: string; stage: string; progress: number; message: string; elapsed: number; error?: string; warnings: string[]; tracks?:number[]; result?:{path?:string;subtitle_count?:number;subtitles?:{track:number;path:string;cue_count?:number}[]}};
-export type Project = {id: string; media: {name: string; path: string; duration: number; size: number; warnings: string[]; audio_tracks: Track[]; subtitle_tracks?:EmbeddedTrack[];auxiliary_tracks?:{type:string}[]}; jobs: Job[]; cue_counts: {track: number; count: number}[]};
+export type Job = {id: string; kind: string; status: string; stage: string; progress: number; message: string; elapsed: number; error?: string; warnings: string[]; tracks?:number[]; target_language?:string; settings?:{review_context?:string}; result?:{path?:string;subtitle_count?:number;subtitles?:{track:number;path:string;cue_count?:number}[]}};
+export type Project = {id: string; review_context:string; media: {name: string; path: string; duration: number; size: number; warnings: string[]; audio_tracks: Track[]; subtitle_tracks?:EmbeddedTrack[];auxiliary_tracks?:{type:string}[]}; jobs: Job[]; cue_counts: {track: number; count: number}[]};
 export type ReviewSource = {cue_track:number;label:string;source_kind:'audio'|'embedded';codec:string};
 export type Candidate = {id: string; text: string; engine: string};
 export type Vote = {role: string; round: number; candidate_id: string; reason: string};

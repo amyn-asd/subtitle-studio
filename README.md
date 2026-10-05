@@ -13,6 +13,8 @@ A local video-to-subtitle workspace for Windows. Transcribe multilingual audio o
 - Two context reviewers with independent initial judgments and one bounded exchange.
 - Verbatim wording, editable timing, Unicode/RTL text, alternatives, and review flags.
 - A virtualized transcript editor, waveform, and short synchronized video previews.
+- A full transcript tab with original/translated/parallel reading views, text copying, and UTF-8 TXT downloads.
+- Optional per-video background notes for both reviewers, without changing speech-recognition prompts or adding words.
 - Separate optional translations through TranslateGemma, using complete short utterances.
 - Resumable processing and SRT export, with explicit audio/subtitle selection in VLC.
 - Embedded text-subtitle inspection, original-format extraction, editing, and local translation.
@@ -28,9 +30,11 @@ Accurate mode recognizes complete short audio windows, with overlap, so quiet wo
 2. Make FFmpeg/ffprobe and Ollama available on PATH, or use their standard Windows installations. VLC is optional. Other executable locations can be selected in Settings.
 3. Run `Setup.bat`. It installs a private Python 3.12 environment and the locked runtime dependencies, then builds the interface.
 4. Open `Start.bat` and use **Models & settings** to install missing models.
-5. Choose a video, select audio tracks, and create subtitles. Review flagged passages before sharing important results.
+5. Choose a video in the in-app file browser, select audio tracks, optionally describe its context, and create subtitles. Review flagged passages before sharing important results.
 
-`Stop.bat` closes the local server and saves completed processing chunks. Closing the browser alone leaves the server running. Reopening `Start.bat` reconnects to it.
+`Stop.bat` closes the local server and saves completed processing chunks. Closing the browser alone leaves the server running. Reopening `Start.bat` reconnects to it. When restarting a stopped server, the launcher reuses its previous local port if that port is available. `Start.ps1 -Port <number>` can request a particular port.
+
+**Choose a video** opens inside the app, with folder navigation, drive/home shortcuts, Unicode paths, search, pagination, and cancellation. It references the original local file; selecting a movie does not upload or copy it. Video-export folder selection uses the same browser. A missing or inaccessible folder displays an error without leaving a Windows dialog running.
 
 An NVIDIA GPU with around 16 GB VRAM is recommended for Accurate mode. CUDA 12.8 PyTorch wheels are pinned for modern NVIDIA hardware, including Blackwell. Models run in sequential stages; the app never intentionally loads all large models together. Other GPU applications still affect available memory.
 
@@ -59,6 +63,10 @@ Models have separate licenses. Downloads come from their publishers/model reposi
 ## Review and exports
 
 Select a cue to prepare a short preview with the correct audio track. Use **Space** to play/pause and **Up/Down** to navigate. Text saves when its editor loses focus. You can choose an alternative, edit text/times, and mark a passage reviewed.
+
+Before creating subtitles, use **Video context (optional)** to describe the setting, speakers, relationships, mood, names, or vocabulary. **Save context** stores up to 4,000 characters locally with that video. Creating subtitles also saves the current notes automatically. Both reviewers receive the same background as quoted, unverified information; it cannot add recognition candidates or replace acoustic evidence. Notes are not passed into speech recognition. Each run captures a context snapshot, which remains unchanged on pause/resume. To apply changed notes, start a new run: recognition chunks are reused when their other settings match, while the review cache includes the notes and is recomputed.
+
+In **Review & export**, switch between **Subtitle editor** and **Full transcript**. The full tab includes every cue in the selected audio or imported subtitle track, regardless of editor search/review filters. Read the original, a selected translation, or both; paragraph breaks group the existing words without rewriting them. **Copy text** and **Download TXT** export the displayed version. Incomplete or stale translated passages remain visibly marked and cannot be copied/downloaded as a complete translation. Original text remains available independently. Translation-only view also selects that language for SRT/video export and VLC playback. Editing source words or choosing an alternative refreshes the translation state of affected utterances immediately.
 
 Default exports are placed beside the source, under `Subtitles/<video name>/`:
 
@@ -117,7 +125,7 @@ The React/TypeScript interface is served by a FastAPI loopback server. A single 
 
 API requests require a per-run token. Host/origin checks protect local file and player operations. Source dialogue is quoted data and cannot invoke tools or change configuration.
 
-The app prepares subtitles before playback. Live transcription, scene-image interpretation, video embedding, and required speaker-identification accounts are outside the current release.
+The app prepares subtitles before playback. Live transcription, scene-image interpretation, and required speaker-identification accounts are outside the current release.
 
 ## License and acknowledgments
 

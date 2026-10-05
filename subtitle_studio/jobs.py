@@ -174,7 +174,8 @@ class Jobs:
         media = self.store.project(pid)["media"]
         if fingerprint(Path(media["path"])) != media["fingerprint"]:
             raise ValueError("The source file has changed. Select it again to create a new project.")
-        signature = hashlib.sha256(json.dumps({"fingerprint": media["fingerprint"], "settings": settings,
+        recognition_settings = {key: value for key, value in settings.items() if key != "review_context"}
+        signature = hashlib.sha256(json.dumps({"fingerprint": media["fingerprint"], "settings": recognition_settings,
                                       "revision": model_revision("turbo" if settings["preset"] == "fast" else "whisper"),
                                       "lid_revision": model_revision("lid"), "qwen_revision": model_revision("qwen_asr"), "pipeline": 4}, sort_keys=True).encode()).hexdigest()[:16]
         cache = DATA / "projects" / pid / "runs" / signature
@@ -257,6 +258,7 @@ class Jobs:
 
     def _debate(self, job, cache):
         pid = job["project_id"]
+        review_context = job["settings"].get("review_context") or ""
         cases = []
         for track in job["tracks"]:
             cues = self.store.cues(pid, track)
@@ -269,9 +271,10 @@ class Jobs:
             for index, (cue, neighbors) in enumerate(cases):
                 self.check_stop(job)
                 self.update(job, stage="discussing", message=f"Two-agent review {index + 1}/{len(cases)}", progress=.83 + index / max(1, len(cases)) * .12)
-                signature = hashlib.sha256(json.dumps({"cue": cue, "neighbors": neighbors, "protocol": 2, "model_digest": model_digest}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
+                signature = hashlib.sha256(json.dumps({"cue": cue, "neighbors": neighbors, "protocol": 3,
+                                                       "review_context": review_context, "model_digest": model_digest}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
                 file = cache / "debates" / f"{cue['id']}-{signature}.json"
-                decision = json.loads(file.read_text(encoding="utf-8")) if file.exists() else choose(cue, neighbors, ollama.chat, model)
+                decision = json.loads(file.read_text(encoding="utf-8")) if file.exists() else choose(cue, neighbors, ollama.chat, model, review_context)
                 atomic_text(file, json.dumps(decision, ensure_ascii=False))
                 revised = apply_choice(cue, decision)
                 self.store.update_cue(pid, cue["id"], {k: revised[k] for k in ("text", "words", "flags", "decision", "reviewed", "language")},

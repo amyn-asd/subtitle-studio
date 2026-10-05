@@ -30,6 +30,8 @@ class Store:
                 CREATE TABLE IF NOT EXISTS exports(project_id TEXT NOT NULL, track INTEGER NOT NULL, language TEXT NOT NULL, path TEXT NOT NULL, PRIMARY KEY(project_id,track,language));
             """)
             db.execute("BEGIN IMMEDIATE")
+            if "review_context" not in {r["name"] for r in db.execute("PRAGMA table_info(projects)")}:
+                db.execute("ALTER TABLE projects ADD COLUMN review_context TEXT NOT NULL DEFAULT ''")
             columns = {r["name"] for r in db.execute("PRAGMA table_info(translations)")}
             if "version" not in columns:
                 db.execute("ALTER TABLE translations ADD COLUMN version INTEGER NOT NULL DEFAULT 0")
@@ -56,7 +58,7 @@ class Store:
                 db.commit()
                 return self.project(existing["id"])
             pid = uuid.uuid4().hex
-            db.execute("INSERT INTO projects VALUES(?,?,?)", (pid, encode(media), time.time()))
+            db.execute("INSERT INTO projects(id,media,created) VALUES(?,?,?)", (pid, encode(media), time.time()))
         return self.project(pid)
 
     def project(self, pid: str) -> dict:
@@ -66,7 +68,7 @@ class Store:
                 raise KeyError("Project not found")
             jobs = [json.loads(r[0]) for r in db.execute("SELECT body FROM jobs WHERE project_id=? ORDER BY updated DESC", (pid,))]
             counts = [dict(r) for r in db.execute("SELECT track,COUNT(*) AS count FROM cues WHERE project_id=? GROUP BY track", (pid,))]
-        return {"id": pid, "media": json.loads(row["media"]), "created": row["created"], "jobs": jobs, "cue_counts": counts}
+        return {"id": pid, "media": json.loads(row["media"]), "created": row["created"], "review_context": row["review_context"], "jobs": jobs, "cue_counts": counts}
 
     def projects(self) -> list[dict]:
         with self.connect() as db:
@@ -76,6 +78,11 @@ class Store:
     def update_media(self, pid: str, media: dict):
         with self.connect() as db:
             db.execute("UPDATE projects SET media=? WHERE id=?", (encode(media), pid))
+
+    def update_context(self, pid: str, context: str):
+        with self.connect() as db:
+            if db.execute("UPDATE projects SET review_context=? WHERE id=?", (context, pid)).rowcount != 1:
+                raise KeyError("Project not found")
 
     def save_job(self, job: dict):
         with self.connect() as db:

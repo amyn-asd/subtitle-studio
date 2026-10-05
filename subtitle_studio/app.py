@@ -10,9 +10,11 @@ import subprocess
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
+from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -25,7 +27,9 @@ from .subtitle_formats import cue_source, preview_audio
 from .models import discover_existing, model_ready, status as model_status, HF_MODELS, OLLAMA_MODELS, ollama
 from .storage import Store
 from .subtitles import srt, atomic_text
-from .types import ProbeRequest, JobRequest, CueEdit, ExportRequest, PlayRequest, TRANSLATION_VERSION, SubtitleImportRequest, RemuxRequest
+from .types import ProbeRequest, JobRequest, CueEdit, ExportRequest, PlayRequest, TRANSLATION_VERSION, SubtitleImportRequest, RemuxRequest, ProjectContext
+from .filesystem import list_files
+from .transcripts import transcript_blocks, transcript_text
 
 
 def create_app(store: Store | None = None, manager=None, token: str | None = None):
@@ -158,24 +162,15 @@ def create_app(store: Store | None = None, manager=None, token: str | None = Non
     @app.get("/api/library")
     def library():
         directory = Path(preferences.get("input_directory", ROOT.parent))
-        extensions = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".mp3", ".wav", ".flac"}
-        return [{"path": str(p), "name": p.name, "size": p.stat().st_size} for p in directory.iterdir()
-                if p.is_file() and p.suffix.lower() in extensions][:100] if directory.exists() else []
+        try:
+            return list_files(str(directory), limit=100, files_only=True)["entries"]
+        except ValueError:
+            return []
 
-    @app.post("/api/browse")
-    def browse(body: dict):
-        if os.name != "nt":
-            raise ValueError("Paste a file path on this operating system.")
-        if body.get("kind") == "folder":
-            script = "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.FolderBrowserDialog; if($d.ShowDialog() -eq 'OK') {ConvertTo-Json -Compress $d.SelectedPath} else {'null'}"
-        else:
-            script = "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.OpenFileDialog; $d.Filter='Media files|*.mp4;*.mkv;*.mov;*.avi;*.webm;*.m4v;*.wav;*.mp3;*.flac|All files|*.*'; if($d.ShowDialog() -eq 'OK') {ConvertTo-Json -Compress $d.FileName} else {'null'}"
-        script = "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding; " + script
-        result = subprocess.run(["powershell.exe", "-NoProfile", "-STA", "-Command", script], capture_output=True,
-                                encoding="utf-8", timeout=600, creationflags=NO_WINDOW)
-        if result.returncode:
-            raise ValueError("The file picker could not open. Paste the path instead.")
-        return {"path": json.loads(result.stdout.strip() or "null")}
+    @app.get("/api/files")
+    def files(path: str | None = None, kind: Literal["file", "folder"] = "file", query: str = "",
+              offset: int = Query(0, ge=0), limit: int = Query(200, ge=1, le=500)):
+        return list_files(path, kind=kind, query=query, offset=offset, limit=limit)
 
     @app.get("/api/projects")
     def projects():
@@ -193,6 +188,14 @@ def create_app(store: Store | None = None, manager=None, token: str | None = Non
     @app.get("/api/projects/{pid}")
     def project(pid: str):
         return load_project(pid)
+
+    @app.patch("/api/projects/{pid}/context")
+    def context(pid: str, body: ProjectContext):
+        project = store.project(pid)
+        if any(j["kind"] == "transcribe" and j["status"] in ("queued", "running", "pausing") for j in project["jobs"]):
+            raise ValueError("Finish or pause transcription before changing its review context")
+        store.update_context(pid, body.review_context)
+        return store.project(pid)
 
     @app.post("/api/projects/{pid}/subtitles/import")
     def import_subtitles(pid: str, body: SubtitleImportRequest):
@@ -298,6 +301,8 @@ def create_app(store: Store | None = None, manager=None, token: str | None = Non
             raise ValueError("Install these models first: " + ", ".join(missing))
         if processing(pid):
             raise ValueError("Finish or pause current processing before transcribing this project")
+        settings["review_context"] = settings["review_context"] if settings["review_context"] is not None else project["review_context"]
+        store.update_context(pid, settings["review_context"])
         return jobs.create(pid, "transcribe", settings, body.tracks)
 
     @app.get("/api/jobs/{jid}")
@@ -333,6 +338,7 @@ def create_app(store: Store | None = None, manager=None, token: str | None = Non
 
     @app.get("/api/projects/{pid}/cues")
     def cues(pid: str, track: int | None = None, language: str | None = None):
+        store.project(pid)
         items = store.cues(pid, track)
         if language and language != "original":
             from .translation import valid_translations
@@ -341,6 +347,30 @@ def create_app(store: Store | None = None, manager=None, token: str | None = Non
                 result = translations.get(cue["id"], {})
                 cue["translated_text"] = result.get("text") if result.get("source_text") == cue["text"] and result.get("version") == TRANSLATION_VERSION else None
         return items
+
+    def full_transcript(pid, track, language):
+        from .translation import LANGUAGE_NAMES
+        project = store.project(pid)
+        cue_source(project["media"], track)
+        if language not in LANGUAGE_NAMES:
+            raise ValueError("Choose a supported translation language")
+        items = cues(pid, track, language)
+        return {"blocks": transcript_blocks(items), "cue_count": len(items),
+                "translated_count": sum(bool(c.get("translated_text")) for c in items),
+                "review_count": sum(bool(c["flags"]) and not c["reviewed"] for c in items), "target_language": language}
+
+    @app.get("/api/projects/{pid}/transcript")
+    def transcript(pid: str, track: int, language: str = "en"):
+        return full_transcript(pid, track, language)
+
+    @app.get("/api/projects/{pid}/transcript/download")
+    def download_transcript(pid: str, track: int, language: str = "en", view: Literal["original", "translated", "parallel"] = "original"):
+        data = full_transcript(pid, track, language)
+        text = transcript_text(data["blocks"], view, language)
+        project = store.project(pid)
+        suffix = "original" if view == "original" else f"{view}.{language}"
+        filename = f"{Path(project['media']['path']).stem[:100]}.transcript.{suffix}.txt"
+        return PlainTextResponse(text, headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"})
 
     @app.patch("/api/projects/{pid}/cues/{cid}")
     def edit(pid: str, cid: str, body: CueEdit):

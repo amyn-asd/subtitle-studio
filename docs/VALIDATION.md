@@ -4,7 +4,7 @@ Tested on 5 October 2026 with Windows, an RTX 5080 (16,303 MiB VRAM), Python 3.1
 
 ## Automated and integration checks
 
-- 35 backend tests passed; the TypeScript/production interface build passed.
+- 45 backend tests passed; the TypeScript/production interface build passed.
 - Locked installed dependencies passed compatibility checks.
 - Real FFmpeg fixtures verified multiple audio tracks, delayed audio, Unicode paths, preview selection, and preservation of source files.
 - Real VLC playback loaded the explicit UTF-8 SRT. Recording its audio output confirmed the first and second selected tracks at 440 Hz and 880 Hz.
@@ -45,6 +45,14 @@ Earlier integration runs processed two complete videos of roughly 18 minutes wit
 The final translation policy was tested with English-to-Persian dialogue and complete German-to-English subtitle exports for both shorter files (249 and 119 cues). A fresh English-to-Persian run with the final 2,048-token translation context used 9,850 MiB total GPU memory and took 5.7 seconds for seven cues. Translation requests combine complete short utterances and distribute their words across existing cue intervals; translated word boundaries are approximate. Generated cue-label translation was replaced after testing exposed shifted and duplicated dialogue.
 
 Detailed reports, transcripts, exports, recordings, and local machine paths are stored outside the committed source, under the ignored data directory. Models and media are excluded from Git. Context review uses neighboring dialogue and recognition evidence; the current release does not interpret scene images or identify speakers reliably in overlapping speech.
+
+## File selection, full transcripts, and supplied context
+
+The added tests cover Unicode media browsing, audio extensions, folder-only selection, search/pagination, missing/unreadable paths, local token/origin enforcement, old-database migration, context length limits and persistence, per-run snapshots, and protection against changing an active transcription's context. Changing notes preserves the recognition cache and invalidates the reviewer cache. Both reviewers receive the same supplied background; injected instructions cannot create a new candidate ID.
+
+Full-transcript tests preserve multilingual words, repetition, reading order, and UTF-8 TXT output. Stale or missing translations are visible but cannot export as complete translations. Browser checks opened a real local fixture through the new picker, recovered from a missing directory, reopened saved context, copied the original/English reading view, downloaded its TXT file, switched original/translated views, and selected a different video-output folder without changing the output filename. Translation view selects the correct English/default track in the video-export dialog. The live route also returned all 249 and 119 cues with their saved English translations, and all 1,008 cues of the long video; flattening the reading paragraphs matched every stored source cue in order. These are presentation checks of existing transcripts, not new full-file recognition runs.
+
+A smoke test with the installed Qwen3.5-9B reviewer model used two supplied candidate strings and scene notes. Both reviewers received the notes, completed their independent judgments and bounded exchange (four model calls, about 14 seconds), and returned an allowed candidate ID. This validates the updated reviewer protocol; it does not establish an accuracy improvement from background notes or replace the reference diagnostics above.
 
 ## Embedded subtitle validation
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 TRANSLATION_VERSION = 2
 
@@ -16,6 +16,21 @@ class Settings(BaseModel):
     start_seconds: float = Field(default=0, ge=0)
     limit_seconds: float | None = Field(default=None, gt=0)
     target_language: str | None = None
+    review_context: str | None = Field(default=None, max_length=4000)
+
+    @field_validator("review_context")
+    @classmethod
+    def strip_context(cls, value):
+        return value.strip() if value is not None else None
+
+
+class ProjectContext(BaseModel):
+    review_context: str = Field(max_length=4000)
+
+    @field_validator("review_context")
+    @classmethod
+    def strip_context(cls, value):
+        return value.strip()
 
 
 class ProbeRequest(BaseModel):
