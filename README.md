@@ -1,6 +1,6 @@
 # Subtitle Studio
 
-A local video-to-subtitle workspace for Windows. Select a video, choose its audio tracks, transcribe multilingual speech, review uncertain passages, and export subtitles or play the original video in VLC.
+A local video-to-subtitle workspace for Windows. Transcribe multilingual audio or import existing embedded subtitles, review and translate the text, then export subtitles, save a subtitled video, or play it in VLC.
 
 ![Local processing](https://img.shields.io/badge/processing-local-195b49) ![Python](https://img.shields.io/badge/python-3.12-195b49) ![License](https://img.shields.io/badge/license-MIT-195b49)
 
@@ -15,6 +15,8 @@ A local video-to-subtitle workspace for Windows. Select a video, choose its audi
 - A virtualized transcript editor, waveform, and short synchronized video previews.
 - Separate optional translations through TranslateGemma, using complete short utterances.
 - Resumable processing and SRT export, with explicit audio/subtitle selection in VLC.
+- Embedded text-subtitle inspection, original-format extraction, editing, and local translation.
+- New MKV/MP4 video export with selected subtitle versions, default-track selection, and original audio/video quality.
 
 Context reviewers select **only supplied recognition candidates**. They cannot generate replacement dialogue. Their agreement keeps the passage flagged; uncertainty scores are not presented as calibrated probabilities. Recognition is a best hypothesis and may still require listening, particularly for overlapping voices or damaged audio.
 
@@ -67,6 +69,30 @@ Default exports are placed beside the source, under `Subtitles/<video name>/`:
 
 Mixed-language originals retain the spoken languages. Translation joins nearby same-language sentence fragments into bounded utterances, then distributes the translated words over their original cue IDs/times. This avoids asking a translator to guess sentence boundaries from generated cue labels. Word boundaries in translated subtitles are approximate because languages reorder words. Edited source text invalidates translations for the affected utterance, preventing stale translation export. **Play in VLC** explicitly supplies the subtitle file and selected audio ordinal. The original media is never rewritten.
 
+### Embedded subtitles
+
+After selecting a video, **Subtitles already in this video** lists its subtitle streams, language metadata, format, and default/forced flags. For text tracks, choose or correct **Text language**, then use **Import & review**. This loads the existing words and times into the editor without speech recognition. The imported track has its own source ID and cannot overwrite an audio transcript. **Optional translation** works the same way as for transcribed audio; translated text remains separate. For an imported track, the preview audio can be selected independently.
+
+**Extract original** prepares a downloadable sidecar. The supported path depends on the subtitle codec and the installed FFmpeg build:
+
+| Embedded format | Extraction and translation |
+| --- | --- |
+| SubRip/SRT | Original SRT, editable and translatable |
+| ASS/SSA | Original ASS with styles; plain words and times imported for translation |
+| WebVTT | Original VTT, editable and translatable |
+| MP4/MOV timed text | Converted to UTF-8 SRT for editing/translation |
+| Other recognized FFmpeg text formats, including TTML | Original format where a muxer is available; normalized SRT for editing/translation |
+| Blu-ray PGS | Original SUP image track; extraction and MKV preservation |
+| DVD/DVB image subtitles | Subtitle-only MKV (`.mks`); extraction and compatible MKV preservation |
+
+Image subtitles contain pictures rather than words. OCR is not implemented; the interface identifies these tracks and keeps translation unavailable. You can preserve/extract them or transcribe the video's audio to create a separate text track. Captions drawn into the video image are not embedded subtitle streams.
+
+Use **Save video** in the editor, or **Save a subtitled video** beside the embedded-track list. Choose one or more complete subtitle versions, an optional default track, and whether to retain the other embedded subtitles. The output must be a new absolute MKV/MP4 filename. A completed temporary file is published without replacing an existing file, including a file that appears during processing. Paused/failed copies can be retried; video copying restarts from the beginning.
+
+**MKV** preserves compatible original styled/image tracks, attachments, chapters, and audio/video streams. Translated or edited subtitles use simple SRT styling; an unedited original is copied directly from the source, preserving its styling. **MP4** converts text subtitles to timed text and requires compatible source audio/video codecs. Image subtitles and attachments require MKV; advanced styles and overlapping presentation may change in MP4. Incompatible data/codecs produce an error rather than silently re-encoding or dropping streams. MOV chapter data is rebuilt from the retained chapter metadata for the destination container. **Play saved video in VLC** opens the completed output with its embedded default track.
+
+Stream mapping and format handling follow the [FFmpeg stream-selection documentation](https://ffmpeg.org/ffmpeg.html#Stream-selection), [subtitle codec support](https://ffmpeg.org/general.html#Subtitle-Formats), and [container documentation](https://ffmpeg.org/ffmpeg-formats.html). Extracting and embedding do not require an AI model or GPU; local text translation uses the configured translation model.
+
 ## Development and testing
 
 ```powershell
@@ -75,7 +101,7 @@ npm.cmd --prefix frontend run build
 .venv\Scripts\python.exe -m subtitle_studio --no-browser
 ```
 
-The normal test suite checks candidate validation, bounded discussion, failure fallbacks, preservation of repeated words, timing offsets, multiple audio tracks, Unicode paths, source preservation, and translation staleness. Media tests require FFmpeg. GitHub Actions runs backend tests and the frontend build without downloading AI weights.
+The normal test suite checks candidate validation, bounded discussion, failure fallbacks, preservation of repeated words, timing offsets, multiple audio tracks, Unicode paths, source preservation, translation staleness, and embedded subtitle extraction/import/remux. Real SRT, ASS, WebVTT, timed-text, PGS, and DVD fixtures verify video/audio packet preservation, styles, chapters, attachments, accessibility flags, cancellation/retry, and output-file races. Media tests require FFmpeg. GitHub Actions runs backend tests and the frontend build without downloading AI weights.
 
 With the app running, `scripts/validate.py` processes supplied media through the real API and records runtime, total observed GPU memory, languages, review counts, and export results under ignored `data/validation/`. Use `--full` for full files or `--start`/`--seconds` for a sample. `--recognition-only` isolates long-file recognition performance. No dialogue is printed to the console.
 

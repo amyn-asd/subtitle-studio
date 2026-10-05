@@ -19,6 +19,13 @@ studio-config.json
 *.flac
 *.srt
 *.vtt
+*.ass
+*.ssa
+*.ttml
+*.sup
+*.mks
+*.sub
+*.idx
 *.sqlite*
 *.log
 *.gguf

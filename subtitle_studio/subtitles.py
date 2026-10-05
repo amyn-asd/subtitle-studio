@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import re
 import textwrap
 import unicodedata
@@ -41,6 +42,37 @@ def srt(cues: list[dict], translated: dict | None = None) -> str:
 
 def stable_id(pid: str, track: int, start: float, index: int) -> str:
     return hashlib.sha256(f"{pid}:{track}:{start:.3f}:{index}".encode()).hexdigest()[:20]
+
+
+def parse_srt(text: str, pid: str, track: int, language: str, codec: str) -> list[dict]:
+    """Read FFmpeg's normalized SRT. Keep raw styled text; expose plain words to translation."""
+    clock = r"(\d+):(\d{2}):(\d{2})[,.](\d{3})"
+    timing = re.compile(rf"^{clock}\s+-->\s+{clock}(?:\s+.*)?$")
+    cues = []
+    for index, block in enumerate(re.split(r"\n\s*\n", text.replace("\r", "").lstrip("\ufeff").strip())):
+        lines = block.splitlines()
+        if not lines:
+            continue
+        at = 1 if lines[0].strip().isdigit() else 0
+        match = timing.match(lines[at]) if at < len(lines) else None
+        if not match:
+            raise ValueError("The extracted subtitle has an unreadable timestamp")
+        values = [int(n) for n in match.groups()]
+        start, end = [(v[0]*3600 + v[1]*60 + v[2] + v[3]/1000) for v in (values[:4], values[4:])]
+        raw = "\n".join(lines[at + 1:])
+        plain = re.sub(r"<br\s*/?>", "\n", raw, flags=re.I)
+        plain = re.sub(r"</?(?:b|i|u|s|font|ruby|rt)(?:\s[^>]*)?>", "", plain, flags=re.I)
+        plain = html.unescape(re.sub(r"\{\\[^}]*\}", "", plain)).strip()
+        if not plain:  # ASS drawings and empty clearing packets have no words to translate.
+            continue
+        if end <= start or start < 0:
+            raise ValueError("The extracted subtitle has an invalid time interval")
+        cues.append({"id": stable_id(pid, track, start, index), "track": track, "start": start, "end": end,
+                     "text": plain, "raw_text": plain, "styled_text": raw, "language": language,
+                     "words": [], "flags": [], "reviewed": False, "edited": False, "candidates": [],
+                     "decision": None, "verification": f"Imported from embedded {codec.upper()} subtitles",
+                     "source_kind": "embedded"})
+    return cues
 
 
 def group_words(pid: str, track: int, words: list[dict]) -> list[dict]:

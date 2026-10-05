@@ -20,10 +20,12 @@ from . import __version__
 from .config import DATA, ROOT, WEB, MODELS, OLLAMA_DIRECTORY, PREFERENCES, binary, initialize, preferences
 from .jobs import Jobs
 from .media import NO_WINDOW, probe, preview, audio_window, vlc_arguments, fingerprint
+from .embedded import extraction, remux_plan, subtitle_choices, unchanged
+from .subtitle_formats import cue_source, preview_audio
 from .models import discover_existing, model_ready, status as model_status, HF_MODELS, OLLAMA_MODELS, ollama
 from .storage import Store
 from .subtitles import srt, atomic_text
-from .types import ProbeRequest, JobRequest, CueEdit, ExportRequest, PlayRequest, TRANSLATION_VERSION
+from .types import ProbeRequest, JobRequest, CueEdit, ExportRequest, PlayRequest, TRANSLATION_VERSION, SubtitleImportRequest, RemuxRequest
 
 
 def create_app(store: Store | None = None, manager=None, token: str | None = None):
@@ -42,6 +44,20 @@ def create_app(store: Store | None = None, manager=None, token: str | None = Non
     app = FastAPI(title="Subtitle Studio", version=__version__, lifespan=lifespan)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]"] + (["testserver"] if testing else []))
     app.state.store, app.state.jobs, app.state.token = store, jobs, token
+
+    def load_project(pid):
+        project = store.project(pid)
+        if "subtitle_tracks" not in project["media"]:
+            unchanged(project["media"])
+            media = probe(project["media"]["path"])
+            media["audio_tracks"] = project["media"]["audio_tracks"]
+            store.update_media(pid, media)
+            project = store.project(pid)
+        return project
+
+    def processing(pid):
+        return any(j["kind"] in ("transcribe", "translate", "import_subtitles", "remux") and
+                   j["status"] in ("queued", "running", "pausing") for j in store.project(pid)["jobs"])
 
     @app.middleware("http")
     async def local_only(request: Request, call_next):
@@ -176,7 +192,79 @@ def create_app(store: Store | None = None, manager=None, token: str | None = Non
 
     @app.get("/api/projects/{pid}")
     def project(pid: str):
-        return store.project(pid)
+        return load_project(pid)
+
+    @app.post("/api/projects/{pid}/subtitles/import")
+    def import_subtitles(pid: str, body: SubtitleImportRequest):
+        project = load_project(pid)
+        unchanged(project["media"])
+        tracks = project["media"]["subtitle_tracks"]
+        available = {t["cue_track"] for t in tracks if t["kind"] == "text"}
+        if not set(body.tracks) <= available or len(set(body.tracks)) != len(body.tracks):
+            raise ValueError("Select distinct embedded text subtitles. Image subtitles need OCR before translation")
+        if any(key not in body.tracks or value not in LANGUAGE_CODES for key, value in body.languages.items()):
+            raise ValueError("Choose a supported source language for each imported track")
+        if any(body.languages.get(t["cue_track"], t["language"]) == "und" for t in tracks if t["cue_track"] in body.tracks):
+            raise ValueError("Choose the language of the subtitle text before importing")
+        if processing(pid):
+            raise ValueError("Finish or pause current processing before importing subtitles")
+        return jobs.create(pid, "import_subtitles", tracks=body.tracks, languages=body.languages)
+
+    @app.post("/api/projects/{pid}/subtitles/extract")
+    def extract_subtitles(pid: str, body: SubtitleImportRequest):
+        media = load_project(pid)["media"]
+        unchanged(media)
+        available = {t["cue_track"] for t in media["subtitle_tracks"]}
+        if not set(body.tracks) <= available or len(set(body.tracks)) != len(body.tracks):
+            raise ValueError("Select distinct embedded subtitle tracks")
+        return jobs.create(pid, "extract_subtitles", tracks=body.tracks)
+
+    @app.get("/api/projects/{pid}/subtitles/file")
+    def embedded_file(pid: str, track: int):
+        media = load_project(pid)["media"]
+        unchanged(media)
+        _, path = extraction(media, track, DATA / "projects" / pid / "embedded")
+        if not path.exists():
+            raise ValueError("Extract this subtitle track first")
+        source = Path(media["path"])
+        subtitle = cue_source(media, track)
+        filename = f"{source.stem}.embedded-{subtitle['subtitle_ordinal'] + 1}.{path.suffix.lstrip('.')}"
+        return FileResponse(path, filename=filename, media_type="application/octet-stream")
+
+    @app.get("/api/projects/{pid}/subtitles/options")
+    def embedded_options(pid: str):
+        project = load_project(pid)
+        source = Path(project["media"]["path"])
+        output = source.with_name(source.stem + ".subtitled.mkv")
+        number = 2
+        while output.exists():
+            output = source.with_name(f"{source.stem}.subtitled-{number}.mkv")
+            number += 1
+            if number > 10000:
+                raise ValueError("Choose a different output folder; many subtitled copies already exist")
+        return {"subtitles": subtitle_choices(store, pid), "suggested_output": str(output)}
+
+    @app.post("/api/projects/{pid}/subtitles/embed")
+    def embed_subtitles(pid: str, body: RemuxRequest):
+        load_project(pid)
+        if processing(pid):
+            raise ValueError("Finish or pause current processing before saving a video")
+        selections = [s.model_dump() for s in body.subtitles]
+        if any(s["language"] != "original" and s["language"] not in TRANSLATION_CODES for s in selections):
+            raise ValueError("Choose a supported subtitle translation language")
+        plan = remux_plan(store, pid, selections, body.output_path, body.keep_embedded)
+        return jobs.create(pid, "remux", selections=selections, output_path=str(plan["output"]), keep_embedded=body.keep_embedded)
+
+    @app.post("/api/jobs/{jid}/play-output")
+    def play_output(jid: str):
+        job = store.job(jid)
+        if job["kind"] != "remux" or job["status"] != "done" or not job.get("result", {}).get("path"):
+            raise ValueError("Finish saving a subtitled video first")
+        result = job["result"]
+        if fingerprint(Path(result["path"])) != result["fingerprint"]:
+            raise ValueError("The saved video has changed")
+        subprocess.Popen([binary("vlc"), "--no-one-instance", result["path"]], creationflags=NO_WINDOW)
+        return {"launched": True, "path": result["path"]}
 
     @app.post("/api/projects/{pid}/scan")
     def scan(pid: str):
@@ -208,8 +296,8 @@ def create_app(store: Store | None = None, manager=None, token: str | None = Non
                 missing.append("context")
         if missing:
             raise ValueError("Install these models first: " + ", ".join(missing))
-        if any(j["kind"] == "transcribe" and j["status"] in ("queued", "running") for j in project["jobs"]):
-            raise ValueError("This project already has an active transcription job")
+        if processing(pid):
+            raise ValueError("Finish or pause current processing before transcribing this project")
         return jobs.create(pid, "transcribe", settings, body.tracks)
 
     @app.get("/api/jobs/{jid}")
@@ -280,8 +368,10 @@ def create_app(store: Store | None = None, manager=None, token: str | None = Non
         if target not in TRANSLATION_CODES or not tracks or len(set(tracks)) != len(tracks):
             raise ValueError("Choose a supported target language and at least one track")
         if not all(store.cues(pid, t) for t in tracks):
-            raise ValueError("Transcribe selected tracks first")
-        if any(j["kind"] in ("translate", "transcribe") and j["status"] in ("queued", "running", "pausing") for j in store.project(pid)["jobs"]):
+            raise ValueError("Import or transcribe selected tracks first")
+        if any(c["language"] == "und" for c in store.cues(pid) if c["track"] in tracks):
+            raise ValueError("Choose a source language when importing these subtitles")
+        if processing(pid):
             raise ValueError("Finish or pause current processing before translating this project")
         ollama.start()
         if not ollama.ready("translation"):
@@ -289,10 +379,8 @@ def create_app(store: Store | None = None, manager=None, token: str | None = Non
         return jobs.create(pid, "translate", tracks=tracks, target_language=target)
 
     def export_file(pid, track, language, directory=None):
-        project = store.project(pid)
-        audio = next((t for t in project["media"]["audio_tracks"] if t["stream_index"] == track), None)
-        if not audio:
-            raise ValueError("Audio track not found")
+        project = load_project(pid)
+        subtitle_source = cue_source(project["media"], track)
         selected = store.cues(pid, track)
         if not selected:
             raise ValueError("This track has no subtitles yet")
@@ -300,13 +388,14 @@ def create_app(store: Store | None = None, manager=None, token: str | None = Non
             raise ValueError("Unsupported subtitle language")
         source = Path(project["media"]["path"])
         folder = Path(directory) if directory else source.parent / "Subtitles" / source.stem
-        filename = f"{source.stem[:100]}.audio-{audio['audio_ordinal'] + 1}.{language}.srt"
+        label = f"audio-{subtitle_source['audio_ordinal'] + 1}" if track >= 0 else f"embedded-{subtitle_source['subtitle_ordinal'] + 1}"
+        filename = f"{source.stem[:100]}.{label}.{language}.srt"
         path = folder / filename
         from .translation import valid_translations
         translated = valid_translations(selected, store.translations(pid, language), language) if language != "original" else None
         atomic_text(path, srt(selected, translated))
         store.set_export(pid, track, language, str(path))
-        return path, audio
+        return path, subtitle_source
 
     @app.post("/api/projects/{pid}/export")
     def export(pid: str, body: ExportRequest):
@@ -329,19 +418,20 @@ def create_app(store: Store | None = None, manager=None, token: str | None = Non
         media = store.project(pid)["media"]
         if fingerprint(Path(media["path"])) != media["fingerprint"]:
             raise ValueError("The source file has changed. Select it again.")
-        path, audio = export_file(pid, body.track, body.language)
-        args = vlc_arguments(store.project(pid)["media"]["path"], str(path), audio["audio_ordinal"], body.start_seconds)
+        path, _ = export_file(pid, body.track, body.language)
+        audio = preview_audio(load_project(pid)["media"], body.track, body.audio_track)
+        args = vlc_arguments(media["path"], str(path), audio["audio_ordinal"] if audio else 0, body.start_seconds)
         subprocess.Popen(args, creationflags=NO_WINDOW)
         return {"launched": True, "subtitle": str(path)}
 
     @app.post("/api/projects/{pid}/preview")
     def clip(pid: str, body: dict):
-        project = store.project(pid)
+        project = load_project(pid)
         if fingerprint(Path(project["media"]["path"])) != project["media"]["fingerprint"]:
             raise ValueError("The source file has changed. Select it again.")
-        track = int(body["track"])
-        if track not in {t["stream_index"] for t in project["media"]["audio_tracks"]}:
-            raise ValueError("Invalid audio track")
+        source_track = int(body["track"])
+        audio_track = preview_audio(project["media"], source_track, body.get("audio_track"))
+        track = audio_track["stream_index"] if audio_track else None
         start = max(0, float(body.get("start", 0)))
         duration = min(60, max(1, float(body.get("duration", 15))), project["media"]["duration"] - start)
         if duration <= 0:
@@ -351,9 +441,11 @@ def create_app(store: Store | None = None, manager=None, token: str | None = Non
         if not path.exists():
             preview(project["media"]["path"], track, start, duration, path)
         import numpy as np
-        audio = audio_window(project["media"]["path"], track, start, duration)
-        block = max(1, len(audio) // 160)
-        peaks = [round(float(np.max(np.abs(audio[n:n + block]))), 4) for n in range(0, len(audio), block)][:160]
+        peaks = []
+        if track is not None:
+            audio = audio_window(project["media"]["path"], track, start, duration)
+            block = max(1, len(audio) // 160)
+            peaks = [round(float(np.max(np.abs(audio[n:n + block]))), 4) for n in range(0, len(audio), block)][:160]
         # Bound the review cache without touching source files.
         cached = sorted((DATA / "clips").glob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
         total = 0
@@ -364,7 +456,7 @@ def create_app(store: Store | None = None, manager=None, token: str | None = Non
                     cached_path.unlink()
                 except OSError:
                     pass
-        return {"url": f"/api/clips/{key}?k={token}", "start": start, "duration": duration, "peaks": peaks}
+        return {"url": f"/api/clips/{key}?k={token}", "start": start, "duration": duration, "peaks": peaks, "audio_track": track}
 
     @app.get("/api/clips/{key}")
     def clip_file(key: str):

@@ -13,10 +13,12 @@ from pathlib import Path
 
 from .config import DATA, ROOT, child_environment
 from .debate import choose, apply_choice
-from .media import NO_WINDOW, fingerprint
+from .media import NO_WINDOW, fingerprint, probe
+from .embedded import extraction, remux_plan, remux_arguments, unchanged
+from .subtitle_formats import cue_source
 from .models import HF_MODELS, OLLAMA_MODELS, download_hf, model_ready, model_revision, ollama
 from .storage import Store
-from .subtitles import atomic_text, group_words, same_spoken_words
+from .subtitles import atomic_text, group_words, same_spoken_words, parse_srt
 from .translation import translate
 from .worker import QWEN_LANGUAGES
 from .types import TRANSLATION_VERSION
@@ -124,7 +126,14 @@ class Jobs:
                 self._transcribe(job)
             elif job["kind"] == "translate":
                 self._translate(job)
-            self.check_stop(job)
+            elif job["kind"] in ("import_subtitles", "extract_subtitles"):
+                self._subtitles(job)
+            elif job["kind"] == "remux":
+                self._remux(job)
+            else:
+                raise ValueError("Unknown processing job")
+            if not (job["kind"] == "remux" and job.get("result", {}).get("path")):
+                self.check_stop(job)
             self.update(job, status="done", stage="complete", progress=1, message="Ready", finished=time.time())
         except InterruptedError:
             saved = self.store.job(job["id"])
@@ -287,6 +296,117 @@ class Jobs:
                       lambda progress, message: self.update(job, progress=(index + progress) / len(job["tracks"]), message=message),
                       lambda: self.stopped(job), existing,
                       lambda message: job.update(warnings=list(dict.fromkeys(job["warnings"] + [message]))), model_digest)
+
+    def media_command(self, job, args, duration=0):
+        """Cancellable FFmpeg work; progress and stderr stay bounded, including for long movies."""
+        self.check_stop(job)
+        log_path = DATA / "logs" / f"{job['id']}-media.log"
+        with log_path.open("w", encoding="utf-8") as log:
+            process = subprocess.Popen(args[:1] + ["-progress", "pipe:1", "-nostats"] + args[1:],
+                                       stdout=subprocess.PIPE, stderr=log, text=True, encoding="utf-8", creationflags=NO_WINDOW)
+            self.processes[job["id"]] = process
+            last = 0
+            try:
+                for line in process.stdout:
+                    self.check_stop(job)
+                    if duration and line.startswith("out_time_us=") and time.monotonic() - last > .5:
+                        try:
+                            progress = min(.96, max(0, int(line.strip().split("=", 1)[1]) / 1_000_000 / duration))
+                            self.update(job, progress=progress)
+                            last = time.monotonic()
+                        except ValueError:
+                            pass
+                code = process.wait()
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+                self.processes.pop(job["id"], None)
+        self.check_stop(job)
+        if code:
+            raise RuntimeError("FFmpeg could not save this format. Try MKV for wider compatibility. " +
+                               log_path.read_text(encoding="utf-8", errors="replace")[-1800:])
+
+    def _subtitles(self, job):
+        pid = job["project_id"]
+        media = self.store.project(pid)["media"]
+        unchanged(media)
+        folder = DATA / "projects" / pid / "embedded"
+        folder.mkdir(parents=True, exist_ok=True)
+        results = []
+        def extract(args, path):
+            partial = path.with_name(f".{path.name}.{job['id']}.partial")
+            try:
+                self.media_command(job, args[:-1] + [str(partial)])
+                unchanged(media)
+                self.check_stop(job)
+                partial.replace(path)
+            finally:
+                partial.unlink(missing_ok=True)
+        importing = job["kind"] == "import_subtitles"
+        for index, track in enumerate(job["tracks"]):
+            self.check_stop(job)
+            source = cue_source(media, track)
+            self.update(job, stage="importing_subtitles" if importing else "extracting_subtitles",
+                        message=f"Reading embedded subtitle track {index + 1}/{len(job['tracks'])}", progress=index/len(job["tracks"]))
+            args, native = extraction(media, track, folder)
+            extract(args, native)
+            result = {"track": track, "path": str(native), "kind": source["kind"]}
+            if importing:
+                args, normalized = extraction(media, track, folder, normalized=True)
+                extract(args, normalized)
+                language = job.get("languages", {}).get(str(track), job.get("languages", {}).get(track, source["language"]))
+                cues = parse_srt(normalized.read_text(encoding="utf-8-sig"), pid, track, language, source["codec"])
+                if not cues:
+                    raise ValueError("This subtitle track contains no readable text cues")
+                unchanged(media)
+                self.check_stop(job)
+                self.store.replace_cues(pid, track, cues)
+                for embedded in media["subtitle_tracks"]:
+                    if embedded["cue_track"] == track:
+                        embedded["language"] = language
+                self.store.update_media(pid, media)
+                result["cue_count"] = len(cues)
+            results.append(result)
+            self.update(job, result={"subtitles": results}, progress=(index+1)/len(job["tracks"]))
+        unchanged(media)
+
+    def _remux(self, job):
+        plan = remux_plan(self.store, job["project_id"], job["selections"], job["output_path"], job["keep_embedded"])
+        output = plan["output"]
+        output.parent.mkdir(parents=True, exist_ok=True)
+        partial = output.with_name(f".{output.stem}.{job['id']}.partial{output.suffix}")
+        folder = DATA / "projects" / job["project_id"] / "mux" / job["id"]
+        folder.mkdir(parents=True, exist_ok=True)
+        self.update(job, stage="embedding_subtitles", message="Copying video and audio with the selected subtitles",
+                    warnings=plan["warnings"])
+        try:
+            self.media_command(job, remux_arguments(plan, folder, partial), plan["media"]["duration"])
+            unchanged(plan["media"])
+            self.check_stop(job)
+            saved = probe(str(partial))
+            if (len(saved["audio_tracks"]) != len(plan["media"]["audio_tracks"]) or
+                    len(saved["video_tracks"]) != len(plan["media"]["video_tracks"]) or
+                    len(saved["subtitle_tracks"]) != len(plan["entries"])):
+                raise RuntimeError("Saved video did not retain the expected tracks; no output was published")
+            # A hard link atomically publishes the completed file and refuses to overwrite any existing path.
+            try:
+                os.link(partial, output)
+            except FileExistsError:
+                raise ValueError("The output appeared while copying. Choose a new filename; that file was preserved.")
+            except OSError:
+                if os.name != "nt":
+                    raise
+                # Windows rename also refuses existing targets, and works on drives without hard links.
+                os.rename(partial, output)
+            self.update(job, result={"path": str(output), "fingerprint": fingerprint(output),
+                                     "subtitle_count": len(plan["entries"]), "size": output.stat().st_size})
+        finally:
+            partial.unlink(missing_ok=True)
 
     def close(self):
         for jid in list(self.controls):

@@ -44,3 +44,21 @@ class PlayRequest(BaseModel):
     track: int
     language: str = "original"
     start_seconds: float = Field(default=0, ge=0)
+    audio_track: int | None = None
+
+
+class SubtitleImportRequest(BaseModel):
+    tracks: list[int] = Field(min_length=1)
+    languages: dict[int, str] = Field(default_factory=dict)
+
+
+class SubtitleSelection(BaseModel):
+    track: int
+    language: str = "original"
+    default: bool = False
+
+
+class RemuxRequest(BaseModel):
+    subtitles: list[SubtitleSelection] = Field(min_length=1)
+    output_path: str
+    keep_embedded: bool = True

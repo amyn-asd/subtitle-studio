@@ -47,6 +47,13 @@ class Store:
         with self.connect() as db:
             existing = db.execute("SELECT id FROM projects WHERE json_extract(media,'$.fingerprint')=?", (media["fingerprint"],)).fetchone()
             if existing:
+                old = self.project(existing["id"])["media"]
+                media["audio_tracks"] = old["audio_tracks"]
+                if "subtitle_tracks" in old:
+                    previous = {t["stream_index"]: t for t in old["subtitle_tracks"]}
+                    media["subtitle_tracks"] = [{**t, **previous.get(t["stream_index"], {})} for t in media["subtitle_tracks"]]
+                db.execute("UPDATE projects SET media=? WHERE id=?", (encode(media), existing["id"]))
+                db.commit()
                 return self.project(existing["id"])
             pid = uuid.uuid4().hex
             db.execute("INSERT INTO projects VALUES(?,?,?)", (pid, encode(media), time.time()))

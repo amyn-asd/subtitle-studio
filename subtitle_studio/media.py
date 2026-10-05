@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from .config import binary
+from .subtitle_formats import subtitle_description
 
 NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
@@ -36,12 +37,13 @@ def probe(path: str) -> dict:
     media = Path(path).expanduser().resolve(strict=True)
     if not media.is_file():
         raise ValueError("Select a video or audio file.")
-    result = run([binary("ffprobe"), "-v", "warning", "-show_format", "-show_streams", "-of", "json", str(media)])
+    result = run([binary("ffprobe"), "-v", "warning", "-show_format", "-show_streams", "-show_chapters", "-of", "json", str(media)])
     info = json.loads(result.stdout)
     fmt = info.get("format", {})
     duration = float(fmt.get("duration", 0) or 0)
     audio = []
     video = []
+    subtitles = []
     for stream in info.get("streams", []):
         tags = stream.get("tags", {})
         if stream.get("codec_type") == "audio":
@@ -50,6 +52,8 @@ def probe(path: str) -> dict:
                           "channel_layout": stream.get("channel_layout", ""), "title": tags.get("title", ""),
                           "metadata_language": tags.get("language", "und"), "languages": [],
                           "start_time": float(stream.get("start_time", 0) or 0), "detection": "pending"})
+        elif stream.get("codec_type") == "subtitle":
+            subtitles.append(subtitle_description(stream, len(subtitles)))
         elif stream.get("codec_type") == "video" and not stream.get("disposition", {}).get("attached_pic"):
             video.append({"stream_index": stream["index"], "codec": stream.get("codec_name"),
                           "width": stream.get("width"), "height": stream.get("height")})
@@ -59,6 +63,12 @@ def probe(path: str) -> dict:
         raise ValueError("The media has no readable duration. Try repairing the container with FFmpeg.")
     return {"path": str(media), "name": media.name, "duration": duration, "size": media.stat().st_size,
             "fingerprint": fingerprint(media), "audio_tracks": audio, "video_tracks": video,
+            "subtitle_tracks": subtitles, "chapters": info.get("chapters", []),
+            "auxiliary_tracks": [{"stream_index": s["index"], "type": s.get("codec_type"), "codec": s.get("codec_name"),
+                                  "chapter_track": bool("mov" in fmt.get("format_name", "") and info.get("chapters") and
+                                                        s.get("codec_name") == "bin_data" and s.get("codec_tag_string") == "text" and
+                                                        s.get("nb_frames") == str(len(info["chapters"])))}
+                                 for s in info.get("streams", []) if s.get("codec_type") not in ("audio", "video", "subtitle")],
             "warnings": list(dict.fromkeys(result.stderr.decode("utf-8", "replace").strip().splitlines()))}
 
 
@@ -72,10 +82,14 @@ def audio_window(path: str, track: int, start: float, duration: float, dialogue_
     return np.frombuffer(result.stdout, dtype="<f4").copy()
 
 
-def preview(path: str, track: int, start: float, duration: float, destination: Path) -> Path:
+def preview(path: str, track: int | None, start: float, duration: float, destination: Path) -> Path:
+    destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_suffix(".partial.mp4")
-    run([binary("ffmpeg"), "-nostdin", "-v", "error", "-y", "-ss", str(max(0, start)), "-i", path,
-         "-map", "0:v:0?", "-map", f"0:{track}", "-t", str(min(60, duration)),
+    args = [binary("ffmpeg"), "-nostdin", "-v", "error", "-y", "-ss", str(max(0, start)), "-i", path,
+            "-map", "0:v:0?"]
+    if track is not None:
+        args += ["-map", f"0:{track}"]
+    run(args + ["-t", str(min(60, duration)),
          "-vf", "scale=-2:480", "-c:v", "libx264", "-preset", "veryfast", "-crf", "25",
          "-af", "aresample=async=1:first_pts=0", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
          str(partial)], timeout=180)
