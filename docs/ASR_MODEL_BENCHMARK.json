@@ -1,0 +1,312 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-05",
+  "source": "Private Persian recording A",
+  "source_duration_seconds": 962.639773,
+  "reference_words": 2664,
+  "reference_used_only_for_scoring": true,
+  "independent_audio_ground_truth_verified": false,
+  "hardware": {
+    "gpu": "NVIDIA GeForce RTX 5080",
+    "gpu_memory_mib": 16303,
+    "physical_ram_gb": 64,
+    "os": "Windows",
+    "python": "3.12"
+  },
+  "audio": {
+    "sample_rate": 16000,
+    "channels": 1,
+    "format": "float32 PCM",
+    "profile": "level",
+    "bytes": 61608944,
+    "sha256": "40a75686337bfd9cdcb69558235b9dbaadbd25757312676f1b21f41ec06c3801",
+    "identical_for_all_five_models": true
+  },
+  "settings": {
+    "language": "Persian (fa / fas_Arab)",
+    "primary_chunk_seconds": 16,
+    "primary_vad_threshold": 0.25,
+    "primary_min_silence_ms": 250,
+    "primary_speech_pad_ms": 400,
+    "recover_missed_speech": true,
+    "context_prompts": false,
+    "context_reviewers": false,
+    "translation": false,
+    "reference_prompt": false,
+    "fresh_inference_cache": true,
+    "beam_size": 5,
+    "ctc_decoder": "greedy collapse; no external language model",
+    "alternative_max_new_tokens": 1024
+  },
+  "metric": {
+    "name": "Normalized word error against supplied reference",
+    "formula": "100 * (substitutions + deletions + insertions) / reference_words",
+    "normalization": "NFKC, casefold, Persian Yeh/Kaf, half-spaces to spaces, remove combining marks/tatweel, unify digits, punctuation removed"
+  },
+  "timing": {
+    "repetitions_per_model": 1,
+    "whisper_baselines": "Previously measured tuned runs on the identical source and prepared waveform",
+    "scope": "Model/runtime imports and loading, fresh audio preparation, recognition, timing alignment where required, and recovery",
+    "excluded": [
+      "Downloads and runtime setup",
+      "Reference scoring",
+      "SRT/TXT export",
+      "Python process startup and base utility imports"
+    ],
+    "caveats": [
+      "Not averaged or randomly interleaved",
+      "OS file caches were not flushed",
+      "Background desktop GPU use included in device memory readings",
+      "Architecture-specific decoding and timing methods differ"
+    ]
+  },
+  "provenance": {
+    "qwen_repository": "Qwen/Qwen3-ASR-1.7B",
+    "qwen_revision": "7278e1e70fe206f11671096ffdd38061171dd6e5",
+    "turbo_repository": "openai/whisper-large-v3-turbo",
+    "turbo_revision": "41f01f3fe87f28c78e2fbf8b568835947dd65ed9",
+    "large_repository": "Systran/faster-whisper-large-v3",
+    "large_revision": "edaa852ec7e145841d8ffdb056a99866b5f0a478",
+    "alignment_repository": "jonatasgrosman/wav2vec2-large-xlsr-53-persian",
+    "alignment_revision": "234714078a1398a9db88194c5a40fefe6f376dc1",
+    "omnilingual_source_commit": "81f51e224ce9e74b02cc2a3eaf21b2d91d743455",
+    "fairseq2_source_commit": "7f06d6f4f5d497eec02b1a238d2071eb5dc48df3",
+    "omni_assets": [
+      {
+        "filename": "languges_lookup_table.parquet",
+        "bytes": 20504,
+        "sha256": "1f5e1486c455a9ab6e492c0b187e538a5c3736e876e20e7417ae6678a034f5b8"
+      },
+      {
+        "filename": "omniASR-CTC-3B-v2.pt",
+        "bytes": 12325920624,
+        "sha256": "fa7f662c326842bb80561db97631ae3c48d911aec579654a1e8414c26caf9089"
+      },
+      {
+        "filename": "omniASR-LLM-3B-v2.pt",
+        "bytes": 17522679843,
+        "sha256": "6c454275703c96e5f68ce3b6315345251dfc70028b1f795cd60972150bb2a044"
+      },
+      {
+        "filename": "omniASR_tokenizer_written_v2.model",
+        "bytes": 91481,
+        "sha256": "8aa11a1092142ef472537476ef6e76541123e2f0d789b79f3ebd119008240b1e"
+      }
+    ]
+  },
+  "results": [
+    {
+      "model": "Whisper large-v3 Turbo",
+      "precision": "float16",
+      "batch_size": 4,
+      "runtime": "native faster-whisper",
+      "wall_seconds": 39.115280600000006,
+      "reference_words": 2664,
+      "output_words": 2623,
+      "word_count_gap": 41,
+      "minimum_word_edits": 920,
+      "reference_edit_percent": 34.53453453453454,
+      "matches": 1873,
+      "substitutions": 621,
+      "deletions": 170,
+      "insertions": 129,
+      "cues": 189,
+      "source_unchanged": true
+    },
+    {
+      "model": "Whisper large-v3",
+      "precision": "float16",
+      "batch_size": 4,
+      "runtime": "native faster-whisper",
+      "wall_seconds": 76.54871769999954,
+      "reference_words": 2664,
+      "output_words": 2510,
+      "word_count_gap": 154,
+      "minimum_word_edits": 941,
+      "reference_edit_percent": 35.32282282282282,
+      "matches": 1839,
+      "substitutions": 555,
+      "deletions": 270,
+      "insertions": 116,
+      "device_peak_memory_mib": 8558,
+      "phase_seconds": {
+        "whisper_model": 3.269821600000796,
+        "prepare_track": 0.5593031000007613,
+        "recover_speech": 22.281393899998875
+      },
+      "cues": 194,
+      "source_unchanged": true
+    },
+    {
+      "model": "Qwen3-ASR 1.7B",
+      "precision": "bfloat16",
+      "batch_size": 4,
+      "runtime": "official qwen-asr / Transformers",
+      "wall_seconds": 202.06322680000085,
+      "reference_words": 2664,
+      "output_words": 2508,
+      "word_count_gap": 156,
+      "minimum_word_edits": 1355,
+      "reference_edit_percent": 50.86336336336336,
+      "matches": 1395,
+      "substitutions": 1027,
+      "deletions": 242,
+      "insertions": 86,
+      "device_peak_memory_mib": 9009,
+      "torch_peak_allocated_mib": 5552.82763671875,
+      "primary_metrics": {
+        "reference_words": 2664,
+        "output_words": 2442,
+        "word_count_gap": 222,
+        "minimum_word_edits": 1356,
+        "reference_edit_percent": 50.9009009009009,
+        "matches": 1378,
+        "substitutions": 994,
+        "deletions": 292,
+        "insertions": 70,
+        "note": "Edits to the supplied reference, which may itself contain errors; word count alone is not accuracy."
+      },
+      "phase_seconds": {
+        "runtime_and_models": 29.375755400000344,
+        "audio_preparation": 0.8293924999998126,
+        "alignment": 17.10515879999366,
+        "recognition": 146.91625629998998,
+        "recovery_total": 21.753389099998458
+      },
+      "recovery_gaps": 27,
+      "primary_clips": 69,
+      "alignment_failures": [],
+      "versions": {
+        "torch": "2.11.0+cu128",
+        "transformers": "4.57.6",
+        "qwen-asr": "0.0.6",
+        "whisperx": "3.7.2",
+        "faster-whisper": "1.2.1"
+      },
+      "cues": 245,
+      "source_unchanged": true
+    },
+    {
+      "model": "OmniASR CTC 3B v2",
+      "precision": "bfloat16",
+      "batch_size": 4,
+      "runtime": "experimental Windows Transformers port",
+      "wall_seconds": 40.71580279999944,
+      "reference_words": 2664,
+      "output_words": 2270,
+      "word_count_gap": 394,
+      "minimum_word_edits": 1026,
+      "reference_edit_percent": 38.513513513513516,
+      "matches": 1676,
+      "substitutions": 556,
+      "deletions": 432,
+      "insertions": 38,
+      "device_peak_memory_mib": 12082,
+      "torch_peak_allocated_mib": 7887.650390625,
+      "primary_metrics": {
+        "reference_words": 2664,
+        "output_words": 2083,
+        "word_count_gap": 581,
+        "minimum_word_edits": 1091,
+        "reference_edit_percent": 40.953453453453456,
+        "matches": 1607,
+        "substitutions": 442,
+        "deletions": 615,
+        "insertions": 34,
+        "note": "Edits to the supplied reference, which may itself contain errors; word count alone is not accuracy."
+      },
+      "phase_seconds": {
+        "runtime_and_models": 8.842575200000283,
+        "audio_preparation": 0.5635043000002042,
+        "alignment": 15.204322999998112,
+        "recognition": 8.456016399999498,
+        "recovery_total": 11.084498300000632
+      },
+      "recovery_gaps": 54,
+      "primary_clips": 69,
+      "alignment_failures": [],
+      "engine_metadata": {
+        "runtime": "experimental Windows Transformers port; native parity not established",
+        "checkpoint": "omniASR-CTC-3B-v2.pt",
+        "mapped_tensor_count": 999,
+        "encoder_heads": 16,
+        "encoder_layers": 60,
+        "precision": "bfloat16",
+        "language": null,
+        "decoder": "greedy CTC collapse",
+        "max_new_tokens": null,
+        "truncated_clips": 0
+      },
+      "versions": {
+        "torch": "2.11.0+cu128",
+        "transformers": "4.57.6",
+        "qwen-asr": "0.0.6",
+        "whisperx": "3.7.2",
+        "faster-whisper": "1.2.1"
+      },
+      "cues": 193,
+      "source_unchanged": true
+    },
+    {
+      "model": "OmniASR LLM 3B v2",
+      "precision": "bfloat16",
+      "batch_size": 1,
+      "runtime": "experimental Windows Transformers port",
+      "wall_seconds": 218.77299889999995,
+      "reference_words": 2664,
+      "output_words": 2530,
+      "word_count_gap": 134,
+      "minimum_word_edits": 890,
+      "reference_edit_percent": 33.408408408408405,
+      "matches": 1872,
+      "substitutions": 560,
+      "deletions": 232,
+      "insertions": 98,
+      "device_peak_memory_mib": 15587,
+      "torch_peak_allocated_mib": 10673.51806640625,
+      "primary_metrics": {
+        "reference_words": 2664,
+        "output_words": 2437,
+        "word_count_gap": 227,
+        "minimum_word_edits": 864,
+        "reference_edit_percent": 32.432432432432435,
+        "matches": 1873,
+        "substitutions": 491,
+        "deletions": 300,
+        "insertions": 73,
+        "note": "Edits to the supplied reference, which may itself contain errors; word count alone is not accuracy."
+      },
+      "phase_seconds": {
+        "runtime_and_models": 13.487191299998813,
+        "audio_preparation": 0.5785405999995419,
+        "alignment": 16.311811499988835,
+        "recognition": 180.62677760000224,
+        "recovery_total": 37.80429279999953
+      },
+      "recovery_gaps": 35,
+      "primary_clips": 69,
+      "alignment_failures": [],
+      "engine_metadata": {
+        "runtime": "experimental Windows Transformers port; native parity not established",
+        "checkpoint": "omniASR-LLM-3B-v2.pt",
+        "mapped_tensor_count": 1111,
+        "encoder_heads": 16,
+        "encoder_layers": 60,
+        "precision": "bfloat16",
+        "language": "fas_Arab",
+        "decoder": "beam 5; no length normalization",
+        "max_new_tokens": 1024,
+        "truncated_clips": 0
+      },
+      "versions": {
+        "torch": "2.11.0+cu128",
+        "transformers": "4.57.6",
+        "qwen-asr": "0.0.6",
+        "whisperx": "3.7.2",
+        "faster-whisper": "1.2.1"
+      },
+      "cues": 188,
+      "source_unchanged": true
+    }
+  ]
+}

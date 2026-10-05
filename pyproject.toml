@@ -12,7 +12,7 @@ dependencies = ["fastapi", "uvicorn", "pydantic>=2", "numpy", "scipy", "soundfil
 [project.optional-dependencies]
 ai = ["faster-whisper", "silero-vad", "speechbrain", "qwen-asr", "whisperx"]
 test = ["pytest", "pytest-asyncio"]
-benchmark = ["pyarrow"]
+benchmark = ["pyarrow", "sentencepiece"]
 
 [tool.setuptools.packages.find]
 include = ["subtitle_studio*"]
