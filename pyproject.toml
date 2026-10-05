@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "subtitle-studio"
+version = "0.1.0"
+description = "Local, evidence-grounded multilingual subtitle studio"
+requires-python = ">=3.12,<3.13"
+dependencies = ["fastapi", "uvicorn", "pydantic>=2", "numpy", "scipy", "soundfile", "httpx", "huggingface-hub"]
+
+[project.optional-dependencies]
+ai = ["faster-whisper", "silero-vad", "speechbrain", "qwen-asr", "whisperx"]
+test = ["pytest", "pytest-asyncio"]
+benchmark = ["pyarrow"]
+
+[tool.setuptools.packages.find]
+include = ["subtitle_studio*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
