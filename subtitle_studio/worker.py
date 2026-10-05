@@ -15,6 +15,8 @@ from .config import DATA, MODELS
 from .media import audio_window
 from .models import model_path, model_ready
 from .subtitles import atomic_text
+from .audio_processing import prepare_track
+from .speech_coverage import uncovered_speech, repetitive_text
 
 QWEN_LANGUAGES = {"zh": "Chinese", "en": "English", "yue": "Cantonese", "ar": "Arabic", "de": "German",
                   "fr": "French", "es": "Spanish", "pt": "Portuguese", "id": "Indonesian", "it": "Italian",
@@ -59,11 +61,12 @@ class Detector:
             except Exception as exc:
                 emit("warning", message=f"Independent language detector unavailable: {exc}")
 
-    def speech(self, audio):
+    def speech(self, audio, coverage=False):
         from silero_vad import get_speech_timestamps
         return get_speech_timestamps(self.torch.from_numpy(audio.copy()), self.vad, sampling_rate=16000,
-                                     threshold=.35, min_speech_duration_ms=180, min_silence_duration_ms=700,
-                                     speech_pad_ms=350, return_seconds=True)
+                                     threshold=.25 if coverage else .35, min_speech_duration_ms=180,
+                                     min_silence_duration_ms=250 if coverage else 700,
+                                     speech_pad_ms=100 if coverage else 350, return_seconds=True)
 
     def language(self, audio) -> dict | None:
         if self.lid is None or len(audio) < 32000:
@@ -121,99 +124,143 @@ def scan(manifest):
     emit("result", media=media)
 
 
+def segment_words(segment, origin, duration, language, index, recovered=False):
+    result = []
+    for word in segment.words or []:
+        start = max(0, min(duration, float(word.start)))
+        end = max(start, min(duration, float(word.end)))
+        flags = []
+        if word.probability < .5 or segment.avg_logprob < -.8:
+            flags.append("Uncertain recognition")
+        if segment.no_speech_prob > .5:
+            flags.append("Possible nonverbal audio")
+        if segment.compression_ratio > 2.4:
+            flags.append("Possible repeated artifact")
+        if recovered:
+            flags.append("Recovered speech; check audio")
+        if end <= start or end-start > 2:
+            flags.append("Uncertain word timing")
+        result.append({"word": word.word, "start": origin+start, "end": origin+end,
+            "probability": word.probability, "language": language, "language_hint": None,
+            "flags": flags, "chunk": index, "avg_logprob": segment.avg_logprob})
+    return result
+
+
+def recover_speech(model, audio, existing, detector, language, origin=0):
+    duration = len(audio)/16000
+    speech = detector.speech(np.asarray(audio), coverage=True)
+    local_words = [{**w,"start":w["start"]-origin,"end":w["end"]-origin} for w in existing]
+    gaps = uncovered_speech(speech,local_words,duration)
+    additions, evidence = [], []
+    for index, gap in enumerate(gaps):
+        def recognize(margin):
+            offset, end = max(0,gap["start"]-margin), min(duration,gap["end"]+margin)
+            iterator, info = model.transcribe(np.asarray(audio[round(offset*16000):round(end*16000)]),
+                language=language, beam_size=5, temperature=0, word_timestamps=True,
+                without_timestamps=False, condition_on_previous_text=False, vad_filter=False)
+            segments = list(iterator)
+            picked = [word for segment in segments
+                for word in segment_words(segment,offset,end-offset,language or info.language,-index-1,True)
+                if gap["start"] <= (word["start"]+word["end"])/2 <= gap["end"]]
+            return segments,picked
+        segments, picked = recognize(.4)
+        retry = any(s.compression_ratio>2.4 or repetitive_text(s.text) for s in segments)
+        if retry:
+            segments, picked = recognize(2)
+            if repetitive_text("".join(w["word"] for w in picked)):
+                picked = []
+        evidence.append({**gap,"retried":retry,"text":"".join(w["word"] for w in picked)})
+        additions.extend({**w,"start":w["start"]+origin,"end":w["end"]+origin} for w in picked)
+        emit("progress",progress=.85+.15*(index+1)/max(1,len(gaps)),
+             message=f"Recovering audible speech {index+1}/{len(gaps)}")
+    return additions,evidence
+
+
 def primary(manifest):
-    settings, media = manifest["settings"], manifest["media"]
-    model, pipeline = whisper_model(settings)
+    settings, media = manifest["settings"],manifest["media"]
+    model,pipeline = whisper_model(settings)
     detector = Detector()
-    cache = Path(manifest["cache"])
-    cache.mkdir(parents=True, exist_ok=True)
-    # Keep the whole window, including its two-second margins, within Whisper's
-    # 30-second acoustic input. Independent decoding avoids timestamp-driven
-    # seeking that can skip an utterance after a pause.
-    window_size = min(settings["chunk_seconds"], 26) if settings["preset"] == "accurate" else settings["chunk_seconds"]
-    beginning = min(settings.get("start_seconds", 0), media["duration"])
-    ending = min(media["duration"], beginning + (settings.get("limit_seconds") or media["duration"]))
-    windows = [(track, start) for track in manifest["tracks"] for start in np.arange(beginning, ending, window_size)]
-    batch = settings.get("batch_size", 4)
-    for index, (track, start) in enumerate(windows):
-        start = float(start)
-        end = min(ending, start + window_size)
-        file = cache / f"track-{track}-at-{start:.3f}.json"
-        if file.exists():
-            chunk = json.loads(file.read_text(encoding="utf-8"))
+    cache = Path(manifest["cache"]); cache.mkdir(parents=True,exist_ok=True)
+    beginning = min(settings.get("start_seconds",0),media["duration"])
+    ending = min(media["duration"],beginning+(settings.get("limit_seconds") or media["duration"]))
+    if ending <= beginning:
+        raise ValueError("The requested range contains no audio")
+    # Explicit timestamp-token decoding and padded speech boundaries are needed
+    # for complete recognition. Word timestamps alone do not enable that mode.
+    chunk_length = min(settings.get("chunk_seconds",16),16)
+    for track_number,track in enumerate(manifest["tracks"]):
+        emit("progress",progress=0,message=f"Preparing audio {track} ({settings.get('audio_profile','level')})")
+        audio = prepare_track(media["path"],track,beginning,ending-beginning,
+            cache/f"audio-{track}.f32",settings.get("audio_profile","level"))
+        marker = cache/f"track-{track}-primary.json"
+        saved = json.loads(marker.read_text(encoding="utf-8")) if marker.exists() else None
+        all_words, files = [], []
+        if saved and saved.get("complete"):
+            for filename in saved["files"]:
+                chunk = json.loads((cache/filename).read_text(encoding="utf-8"))
+                all_words.extend(chunk["words"])
+                emit("chunk",chunk=chunk,progress=.85*(track_number+1)/len(manifest["tracks"]),message="Reading saved recognition")
         else:
-            offset = max(0, start - 2)
-            audio = audio_window(media["path"], track, offset, min(media["duration"], end + 2) - offset)
-            speech = detector.speech(audio)
-            chunk = {"track": track, "start": start, "end": end, "words": [], "languages": [], "speech": speech}
-            # Accurate mode lets the recognizer hear the complete bounded window. Applying
-            # a second VAD trim was dropping quiet dialogue; VAD remains boundary evidence.
-            has_signal = bool(np.mean(audio * audio) > 1e-7)
-            if speech or (settings["preset"] == "accurate" and has_signal):
-                while True:
-                    try:
-                        if settings["preset"] == "accurate":
-                            iterator, info = pipeline.transcribe(audio, language=settings.get("language"), beam_size=5,
-                                          word_timestamps=True, multilingual=not bool(settings.get("language")),
-                                          vad_filter=False, clip_timestamps=[{"start": 0, "end": len(audio) / 16000}],
-                                          batch_size=batch, temperature=0)
-                        else:
-                            iterator, info = pipeline.transcribe(audio, language=settings.get("language"), beam_size=5,
-                                          word_timestamps=True, condition_on_previous_text=False, multilingual=not bool(settings.get("language")),
-                                          vad_filter=True, vad_parameters={"threshold": .35, "min_silence_duration_ms": 700, "speech_pad_ms": 350},
-                                          batch_size=batch, temperature=0)
-                        segments = list(iterator)
-                        break
-                    except RuntimeError as exc:
-                        if ("memory" in str(exc).lower() or "cublas_status_alloc" in str(exc).lower()) and batch > 1:
-                            batch = max(1, batch // 2)
-                            emit("warning", message=f"Reducing recognition batch to {batch}; retaining the same accuracy model.")
-                        else:
-                            raise
-                spans = []
-                for position in range(0, len(audio), 8 * 16000):
-                    sample = audio[position:position + 8 * 16000]
-                    if len(sample) >= 2 * 16000 and detector.speech(sample):
-                        lid = detector.language(sample)
-                        if lid:
-                            spans.append({"start": offset + position / 16000, "end": offset + (position + len(sample)) / 16000, **lid})
-                chunk["languages"] = spans or [{"start": start, "end": end, "language": info.language, "score": info.language_probability}]
-                for segment in segments:
-                    speech_overlaps = any(s["start"] < segment.end and s["end"] > segment.start for s in speech)
-                    # Batched decoding does not apply Whisper's no-speech filter.
-                    # Combine acoustic no-speech evidence with VAD/recognition
-                    # evidence; this rejects noise without trimming quiet words.
-                    if segment.no_speech_prob > .6 and (not speech_overlaps or segment.avg_logprob <= -1):
-                        continue
-                    for word in segment.words or []:
-                        absolute_start = offset + word.start
-                        absolute_end = offset + word.end
-                        midpoint = (absolute_start + absolute_end) / 2
-                        if not start <= midpoint < end:
-                            continue
-                        flags = []
-                        relative_midpoint = midpoint - offset
-                        if not any(s["start"] <= relative_midpoint <= s["end"] for s in speech):
-                            flags.append("Uncertain speech boundary")
-                        if word.probability < .5 or segment.avg_logprob < -.8:
-                            flags.append("Uncertain recognition")
-                        if segment.no_speech_prob > .5:
-                            flags.append("Possible nonverbal audio")
-                        if segment.compression_ratio > 2.4:
-                            flags.append("Possible repeated artifact")
-                        language = settings.get("language") or info.language
-                        span = next((s for s in spans if s["start"] <= midpoint < s["end"]), None)
-                        if not settings.get("language") and span and span["score"] > .75 and span["language"] != info.language:
-                            flags.append("Language disagreement")
-                        if info.language_probability < .7:
-                            flags.append("Uncertain language")
-                        chunk["words"].append({"word": word.word, "start": max(beginning, absolute_start),
-                            "end": min(ending, absolute_end), "probability": word.probability, "language": language,
-                            "language_hint": span["language"] if span else None,
-                            "flags": flags, "chunk": index, "avg_logprob": segment.avg_logprob})
-            atomic_text(file, json.dumps(chunk, ensure_ascii=False))
-        emit("chunk", chunk=chunk, progress=(index + 1) / max(1, len(windows)),
-             message=f"Audio {track}: {int(end)} / {int(ending)} seconds")
+            # The generator yields completed segments for immediate checkpointing.
+            # A partial resume reruns deterministic decoding and reuses saved
+            # segments, rather than seeking past an unfinished spoken sentence.
+            batch = settings.get("batch_size",4)
+            while True:
+                try:
+                    iterator,info = pipeline.transcribe(audio,language=settings.get("language"),
+                        beam_size=5,temperature=0,word_timestamps=True,without_timestamps=False,
+                        multilingual=not bool(settings.get("language")),batch_size=batch,vad_filter=True,
+                        vad_parameters={"threshold":.25,"min_silence_duration_ms":250,"speech_pad_ms":400},
+                        chunk_length=chunk_length)
+                    decoded = iter(iterator)
+                    first = next(decoded,None)
+                    break
+                except RuntimeError as exc:
+                    if batch>1 and ("memory" in str(exc).lower() or "cublas_status_alloc" in str(exc).lower()):
+                        batch=max(1,batch//2)
+                        from faster_whisper import BatchedInferencePipeline
+                        pipeline=BatchedInferencePipeline(model)
+                        emit("warning",message=f"Reducing recognition batch to {batch}; keeping the selected model.")
+                    else:
+                        raise
+            import itertools
+            for index,segment in enumerate(itertools.chain([] if first is None else [first],decoded)):
+                filename=f"track-{track}-at-{beginning+segment.start:.3f}-{index:06}.json"
+                file=cache/filename
+                if file.exists():
+                    chunk=json.loads(file.read_text(encoding="utf-8"))
+                else:
+                    language=settings.get("language") or info.language
+                    words=segment_words(segment,beginning,len(audio)/16000,language,index)
+                    spans=[]
+                    if not settings.get("language"):
+                        sample=np.asarray(audio[round(segment.start*16000):round(segment.end*16000)])
+                        hint=detector.language(sample)
+                        if hint:
+                            spans=[{"start":beginning+segment.start,"end":beginning+segment.end,**hint}]
+                            for word in words:
+                                word["language_hint"]=hint["language"]
+                                if hint["score"]>.75 and hint["language"]!=language:
+                                    word["flags"].append("Language disagreement")
+                    chunk={"track":track,"start":beginning+segment.start,"end":beginning+segment.end,
+                        "words":words,"languages":spans or [{"start":beginning+segment.start,"end":beginning+segment.end,
+                            "language":language,"score":info.language_probability}],"raw_text":segment.text}
+                    atomic_text(file,json.dumps(chunk,ensure_ascii=False))
+                files.append(filename); all_words.extend(chunk["words"])
+                emit("chunk",chunk=chunk,progress=.85*(track_number+segment.end/(ending-beginning))/len(manifest["tracks"]),
+                     message=f"Audio {track}: {int(beginning+segment.end)} / {int(ending)} seconds")
+            atomic_text(marker,json.dumps({"complete":True,"files":files}))
+        if settings.get("recover_speech",True):
+            file=cache/f"track-{track}-recovery.json"
+            if file.exists():
+                recovery=json.loads(file.read_text(encoding="utf-8"))
+            else:
+                words,evidence=recover_speech(model,audio,all_words,detector,settings.get("language"),beginning)
+                recovery={"track":track,"start":beginning,"end":ending,"words":words,"languages":[],"evidence":evidence}
+                atomic_text(file,json.dumps(recovery,ensure_ascii=False))
+            emit("chunk",chunk=recovery,progress=(track_number+1)/len(manifest["tracks"]),
+                 message=f"Recovered {len(recovery['words'])} additional word entries in audio {track}")
+        del audio
 
 
 def recheck(manifest, use_whisper=False):

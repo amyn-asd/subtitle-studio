@@ -11,7 +11,9 @@ class Settings(BaseModel):
     language: str | None = None
     recheck: bool = True
     debate: bool = True
-    chunk_seconds: int = Field(default=30, ge=15, le=60)
+    audio_profile: Literal["original", "level", "gentle", "speech"] = "level"
+    recover_speech: bool = True
+    chunk_seconds: int = Field(default=16, ge=8, le=60)
     batch_size: int = Field(default=4, ge=1, le=16)
     start_seconds: float = Field(default=0, ge=0)
     limit_seconds: float | None = Field(default=None, gt=0)

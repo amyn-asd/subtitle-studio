@@ -22,6 +22,7 @@ from .subtitles import atomic_text, group_words, same_spoken_words, parse_srt
 from .translation import translate
 from .worker import QWEN_LANGUAGES
 from .types import TRANSLATION_VERSION
+from .audio_processing import AUDIO_VERSION
 
 
 class Jobs:
@@ -177,10 +178,14 @@ class Jobs:
         recognition_settings = {key: value for key, value in settings.items() if key != "review_context"}
         signature = hashlib.sha256(json.dumps({"fingerprint": media["fingerprint"], "settings": recognition_settings,
                                       "revision": model_revision("turbo" if settings["preset"] == "fast" else "whisper"),
-                                      "lid_revision": model_revision("lid"), "qwen_revision": model_revision("qwen_asr"), "pipeline": 4}, sort_keys=True).encode()).hexdigest()[:16]
+                                      "lid_revision": model_revision("lid"), "qwen_revision": model_revision("qwen_asr"),
+                                      "audio_version": AUDIO_VERSION, "pipeline": 5}, sort_keys=True).encode()).hexdigest()[:16]
         cache = DATA / "projects" / pid / "runs" / signature
         all_words = {track: [] for track in job["tracks"]}
         def primary_event(item):
+            if item["type"] == "progress":
+                self.update(job, message=item["message"])
+                return
             if item["type"] != "chunk":
                 return
             chunk = item["chunk"]

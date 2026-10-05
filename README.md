@@ -9,6 +9,7 @@ A local video-to-subtitle workspace for Windows. Transcribe multilingual audio o
 - Audio-track inspection and sampled language detection before processing.
 - Language checks throughout selected audio, including changes in conversation.
 - Accurate Whisper large-v3 recognition; optional faster Whisper turbo mode.
+- Speech level adjustment, optional noise reduction, and audio-based recovery of missed speech.
 - Selective Qwen3-ASR rechecks for difficult passages.
 - Two context reviewers with independent initial judgments and one bounded exchange.
 - Verbatim wording, editable timing, Unicode/RTL text, alternatives, and review flags.
@@ -22,7 +23,7 @@ A local video-to-subtitle workspace for Windows. Transcribe multilingual audio o
 
 Context reviewers select **only supplied recognition candidates**. They cannot generate replacement dialogue. Their agreement keeps the passage flagged; uncertainty scores are not presented as calibrated probabilities. Recognition is a best hypothesis and may still require listening, particularly for overlapping voices or damaged audio.
 
-Accurate mode recognizes complete short audio windows, with overlap, so quiet words are not cut away by a second speech filter. Independent window decoding avoids skipping dialogue after pauses. Nonverbal filtering combines the recognizer's no-speech evidence with speech-region and recognition evidence; uncertain words remain flagged. Differences in punctuation alone retain the original wording and do not trigger a discussion. Human edits and review decisions take priority over AI results, including requests already in flight.
+Recognition uses explicit timestamp-token decoding and padded speech regions of up to 16 seconds. Audio preparation evens out quiet and loud sections without changing the source video or its timeline. The selected recognizer then checks audible gaps in its word coverage; suspicious repeated output is retried with more audio context. Recovered words remain flagged for listening review. Noise reduction is optional because it can remove speech detail. Differences in punctuation alone retain the original wording and do not trigger a discussion. Human edits and review decisions take priority over AI results, including requests already in flight. See [audio recovery validation](docs/AUDIO_RECOVERY.md) for the measured results and limitations.
 
 ## Windows quick start
 
