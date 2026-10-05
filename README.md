@@ -10,8 +10,8 @@ A local video-to-subtitle workspace for Windows. Transcribe multilingual audio o
 - Language checks throughout selected audio, including changes in conversation.
 - Accurate Whisper large-v3 recognition; optional faster Whisper turbo mode.
 - Speech level adjustment, optional noise reduction, and audio-based recovery of missed speech.
-- Selective Qwen3-ASR rechecks for difficult passages.
-- Two context reviewers with independent initial judgments and one bounded exchange.
+- Selective Whisper large-v3 rechecks of uncertain passages using the prepared audio.
+- One analysis reviewer or two context reviewers with independent judgments and one bounded exchange.
 - Verbatim wording, editable timing, Unicode/RTL text, alternatives, and review flags.
 - A virtualized transcript editor, waveform, and short synchronized video previews.
 - A full transcript tab with original/translated/parallel reading views, text copying, and UTF-8 TXT downloads.
@@ -52,10 +52,10 @@ Local configuration is deliberately ignored by Git. Do not commit your filled-in
 | Stage | Model | Notes |
 | --- | --- | --- |
 | Transcription | Whisper large-v3, FP16 | Broad language coverage through faster-whisper |
-| Rechecks | Qwen3-ASR 1.7B | 30 main languages, including Persian; Whisper retries cover others |
+| Rechecks | Whisper large-v3, FP16 | Difficult passages in Turbo or accurate mode; same prepared audio |
 | Language hints | SpeechBrain VoxLingua107 | Independent audio classifier; disagreements remain hints |
 | Speech regions | Silero VAD | Conservative CPU detection with padding |
-| Discussion | Qwen3.5-9B Q4 | Two logical reviewers share one model with separate conversations |
+| Discussion | Qwen3.5-9B Q4 | One or two logical reviewers share one model with separate conversations |
 | Translation | TranslateGemma 12B Q4 | Optional; translation never overwrites original wording |
 | Replacement timing | WhisperX aligners | Downloaded per language when needed; cue timing retained on failure |
 
@@ -116,7 +116,9 @@ With the app running, `scripts/validate.py` processes supplied media through the
 
 The optional reference benchmark uses public FLEURS recordings and measures word/character errors against known transcriptions. Small benchmark results establish behavior on those samples, not universal accuracy across languages and recording conditions. See [validation results](docs/VALIDATION.md) for the tested scope and limitations.
 
-The [Persian ASR model comparison](docs/ASR_MODEL_BENCHMARK.md) compares tuned Whisper Turbo/large-v3, Qwen3-ASR 1.7B, and two Meta OmniASR 3B v2 variants using identical prepared audio and reference scoring. It includes processing time, omissions, substitutions, memory observations, recovery effects and the limitations of the experimental Windows Meta adapter.
+The historical [Persian ASR model comparison](docs/ASR_MODEL_BENCHMARK.md) compares tuned Whisper Turbo/large-v3, Qwen3-ASR 1.7B, and two Meta OmniASR 3B v2 variants using identical prepared audio and reference scoring. It records the retired-model experiment. The application uses Turbo/large-v3; alternative ASR models and their adapters have been removed.
+
+The [zero/one/two-reviewer benchmark](docs/REVIEWER_BENCHMARK.md) measures review time and word error on the same immutable Turbo output and large-v3 candidate pool. Neither review mode improved the reference score on that recording. Context review can use one analysis agent or the existing bounded two-agent debate.
 
 Install `pyarrow` (`uv pip install --python .venv\Scripts\python.exe pyarrow`), run `scripts/fetch_references.py`, then `scripts/benchmark_references.py`. The download is about 1.8 GB and stays under ignored `data/references/`. `--noise-db 8` adds a reproducible noisy variant; `--languages en fa ja` selects languages, and `--recognition-only` isolates primary recognition. These recordings do not represent all conversational audio.
 
@@ -132,4 +134,4 @@ The app prepares subtitles before playback. Live transcription, scene-image inte
 
 ## License and acknowledgments
 
-Source code is MIT licensed. The design was inspired by Caption Studio and Subtitle Mux Studio; their installers are not included in this repository. Dependencies and model weights retain their own licenses: [Whisper](https://github.com/openai/whisper), [faster-whisper](https://github.com/SYSTRAN/faster-whisper), [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR), [Qwen3.5](https://huggingface.co/Qwen/Qwen3.5-9B), [SpeechBrain](https://speechbrain.github.io/), [Silero](https://github.com/snakers4/silero-vad), [TranslateGemma](https://huggingface.co/google/translategemma-12b-it), [WhisperX](https://github.com/m-bain/whisperX), [FFmpeg](https://ffmpeg.org/legal.html), and [VLC](https://www.videolan.org/legal.html). FLEURS reference recordings are from [Google's dataset](https://huggingface.co/datasets/google/fleurs).
+Source code is MIT licensed. The design was inspired by Caption Studio and Subtitle Mux Studio; their installers are not included in this repository. Dependencies and model weights retain their own licenses: [Whisper](https://github.com/openai/whisper), [faster-whisper](https://github.com/SYSTRAN/faster-whisper), [Qwen3.5](https://huggingface.co/Qwen/Qwen3.5-9B), [SpeechBrain](https://speechbrain.github.io/), [Silero](https://github.com/snakers4/silero-vad), [TranslateGemma](https://huggingface.co/google/translategemma-12b-it), [WhisperX](https://github.com/m-bain/whisperX), [FFmpeg](https://ffmpeg.org/legal.html), and [VLC](https://www.videolan.org/legal.html). FLEURS reference recordings are from [Google's dataset](https://huggingface.co/datasets/google/fleurs).

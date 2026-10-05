@@ -11,6 +11,7 @@ class Settings(BaseModel):
     language: str | None = None
     recheck: bool = True
     debate: bool = True
+    review_agents: Literal[1, 2] = 2
     audio_profile: Literal["original", "level", "gentle", "speech"] = "level"
     recover_speech: bool = True
     chunk_seconds: int = Field(default=16, ge=8, le=60)

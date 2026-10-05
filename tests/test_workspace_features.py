@@ -142,22 +142,24 @@ def test_changed_context_reuses_recognition_but_invalidates_review_cache(workspa
     try:
         manager._transcribe(job)
         job["settings"]["review_context"] = "Scene B"
+        job["settings"]["review_agents"] = 1
         manager._transcribe(job)
         assert manifests[0]["cache"] == manifests[1]["cache"]
         cue = group_words(pid, 1, [{"word": " Vera.", "start": 1, "end": 2, "language": "en", "flags": ["Uncertain recognition"]}])[0]
         cue["candidates"].append({"id": "retry", "text": "Very.", "engine": "test"})
         calls = []
-        def fake_choose(cue, neighbors, chat, model, context):
-            calls.append(context)
+        def fake_choose(cue, neighbors, chat, model, context, agent_count=2):
+            calls.append((context, agent_count))
             return {"selected": "primary", "status": "agreed", "votes": [], "rounds": 1}
         monkeypatch.setattr(module, "choose", fake_choose)
         monkeypatch.setattr(module.ollama, "tags", lambda: [{"name": module.OLLAMA_MODELS["context"], "digest": "fixed"}])
         monkeypatch.setattr(module.ollama, "unload", lambda model: None)
-        for context in ["Scene A", "Scene A", "Scene B"]:
+        for context, agent_count in [("Scene A", 2), ("Scene A", 2), ("Scene B", 2), ("Scene B", 1)]:
             store.replace_cues(pid, 1, [deepcopy(cue)])
             job["settings"]["review_context"] = context
+            job["settings"]["review_agents"] = agent_count
             manager._debate(job, tmp_path / "review-cache")
-        assert calls == ["Scene A", "Scene B"]
+        assert calls == [("Scene A", 2), ("Scene B", 2), ("Scene B", 1)]
         assert store.cues(pid, 1)[0]["raw_text"] == "Vera."
     finally:
         manager.pool.shutdown()

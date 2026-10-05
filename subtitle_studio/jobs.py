@@ -20,7 +20,6 @@ from .models import HF_MODELS, OLLAMA_MODELS, download_hf, model_ready, model_re
 from .storage import Store
 from .subtitles import atomic_text, group_words, same_spoken_words, parse_srt
 from .translation import translate
-from .worker import QWEN_LANGUAGES
 from .types import TRANSLATION_VERSION
 from .audio_processing import AUDIO_VERSION
 
@@ -175,11 +174,11 @@ class Jobs:
         media = self.store.project(pid)["media"]
         if fingerprint(Path(media["path"])) != media["fingerprint"]:
             raise ValueError("The source file has changed. Select it again to create a new project.")
-        recognition_settings = {key: value for key, value in settings.items() if key != "review_context"}
+        recognition_settings = {key: value for key, value in settings.items() if key not in ("review_context", "review_agents", "debate")}
         signature = hashlib.sha256(json.dumps({"fingerprint": media["fingerprint"], "settings": recognition_settings,
                                       "revision": model_revision("turbo" if settings["preset"] == "fast" else "whisper"),
-                                      "lid_revision": model_revision("lid"), "qwen_revision": model_revision("qwen_asr"),
-                                      "audio_version": AUDIO_VERSION, "pipeline": 5}, sort_keys=True).encode()).hexdigest()[:16]
+                                      "lid_revision": model_revision("lid"), "recheck_revision": model_revision("whisper") if settings.get("recheck") else None,
+                                      "audio_version": AUDIO_VERSION, "pipeline": 6}, sort_keys=True).encode()).hexdigest()[:16]
         cache = DATA / "projects" / pid / "runs" / signature
         all_words = {track: [] for track in job["tracks"]}
         def primary_event(item):
@@ -255,15 +254,14 @@ class Jobs:
                                   automated=True, expected_text=cue["text"])
             checked += 1
             self.update(job, progress=.65 + checked / max(1, len(cases)) * .18, message=f"Checked uncertain speech {checked}/{len(cases)}")
-        for use_whisper in (False, True):
-            subset = [c for c in cases if (c["cue"]["language"] not in QWEN_LANGUAGES and not any(h in QWEN_LANGUAGES for h in c["cue"].get("language_hints", []))) == use_whisper]
-            if subset:
-                self.update(job, stage="checking", message=f"Rechecking {len(subset)} uncertain passages")
-                self.worker(job, "recheck_whisper" if use_whisper else "recheck", {**manifest, "cases": subset}, event)
+        if cases:
+            self.update(job, stage="checking", message=f"Large-v3 rechecking {len(cases)} uncertain passages")
+            self.worker(job, "recheck", {**manifest, "cases": cases}, event)
 
     def _debate(self, job, cache):
         pid = job["project_id"]
         review_context = job["settings"].get("review_context") or ""
+        agent_count = job["settings"].get("review_agents", 2)
         cases = []
         for track in job["tracks"]:
             cues = self.store.cues(pid, track)
@@ -275,11 +273,11 @@ class Jobs:
         try:
             for index, (cue, neighbors) in enumerate(cases):
                 self.check_stop(job)
-                self.update(job, stage="discussing", message=f"Two-agent review {index + 1}/{len(cases)}", progress=.83 + index / max(1, len(cases)) * .12)
-                signature = hashlib.sha256(json.dumps({"cue": cue, "neighbors": neighbors, "protocol": 3,
+                self.update(job, stage="discussing", message=f"{agent_count}-agent review {index + 1}/{len(cases)}", progress=.83 + index / max(1, len(cases)) * .12)
+                signature = hashlib.sha256(json.dumps({"cue": cue, "neighbors": neighbors, "protocol": 4, "agent_count": agent_count,
                                                        "review_context": review_context, "model_digest": model_digest}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
                 file = cache / "debates" / f"{cue['id']}-{signature}.json"
-                decision = json.loads(file.read_text(encoding="utf-8")) if file.exists() else choose(cue, neighbors, ollama.chat, model, review_context)
+                decision = json.loads(file.read_text(encoding="utf-8")) if file.exists() else choose(cue, neighbors, ollama.chat, model, review_context, agent_count)
                 atomic_text(file, json.dumps(decision, ensure_ascii=False))
                 revised = apply_choice(cue, decision)
                 self.store.update_cue(pid, cue["id"], {k: revised[k] for k in ("text", "words", "flags", "decision", "reviewed", "language")},

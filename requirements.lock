@@ -106,8 +106,6 @@ pytorch-lightning==2.6.6
 pytorch-metric-learning==2.9.0
 pytz==2026.5
 pyyaml==6.0.3
-qwen-asr==0.0.6
-qwen-omni-utils==0.0.9
 regex==2026.9.29
 requests==2.34.2
 rich==15.0.0

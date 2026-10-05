@@ -18,7 +18,6 @@ from .subtitles import atomic_text
 HF_MODELS = {
     "whisper": {"name": "Whisper large-v3", "repo": "Systran/faster-whisper-large-v3", "required": "model.bin", "size_gb": 3.1},
     "turbo": {"name": "Whisper turbo", "repo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo", "required": "model.bin", "size_gb": 1.6},
-    "qwen_asr": {"name": "Qwen3-ASR 1.7B", "repo": "Qwen/Qwen3-ASR-1.7B", "required": "config.json", "size_gb": 4.4},
     "lid": {"name": "107-language detector", "repo": "speechbrain/lang-id-voxlingua107-ecapa", "required": "embedding_model.ckpt", "size_gb": .1},
 }
 OLLAMA_MODELS = {"context": "qwen3.5:9b", "translation": "translategemma:12b"}
@@ -69,9 +68,7 @@ def discover_existing():
                 continue
             candidates = sorted(snapshots.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
             for path in candidates:
-                if (path / spec["required"]).is_file() and (path / spec["required"]).stat().st_size > (1000000 if key != "qwen_asr" else 100):
-                    if key == "qwen_asr" and not list(path.glob("*.safetensors")):
-                        continue
+                if (path / spec["required"]).is_file() and (path / spec["required"]).stat().st_size > 1000000:
                     registry[key] = {"path": str(path), "revision": path.name, "reused": True}
                     break
             if key in registry:

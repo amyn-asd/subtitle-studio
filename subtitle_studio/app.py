@@ -291,7 +291,7 @@ def create_app(store: Store | None = None, manager=None, token: str | None = Non
             raise ValueError("Unsupported transcription language")
         required = ["turbo" if settings["preset"] == "fast" else "whisper"]
         if settings["recheck"]:
-            required.append("qwen_asr")
+            required.append("whisper")
         missing = [key for key in required if not model_ready(key)]
         if settings["debate"]:
             ollama.start()

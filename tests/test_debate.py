@@ -62,3 +62,24 @@ def test_only_trustworthy_neighbor_dialogue_enters_context():
     result = choose(case(), neighbors, chat, "local")
     assert result["rounds"] == 1 and len(packets) == 2
     assert [n["id"] for n in packets[0]["neighboring_dialogue"]] == ["good"]
+
+
+def test_one_agent_makes_one_context_judgment_with_same_candidate_guard():
+    calls = []
+    def chat(model, messages, schema):
+        calls.append(messages)
+        return answer("qwen")
+    decision = choose(case(), [], chat, "local", agent_count=1)
+    assert len(calls) == 1
+    assert decision['status'] == 'single_review'
+    assert decision['selected'] == 'qwen'
+    assert decision['votes'][0]['role'] == 'context'
+    assert apply_choice(case(), decision)['raw_text'] == 'Turn left.'
+    invalid = choose(case(), [], lambda *args: answer('invented'), 'local', agent_count=1)
+    assert invalid['status'] == 'failed' and invalid['selected'] == 'primary'
+
+
+def test_invalid_review_agent_count_is_rejected():
+    import pytest
+    with pytest.raises(ValueError, match='one or two'):
+        choose(case(), [], lambda *args: answer('primary'), 'local', agent_count=3)

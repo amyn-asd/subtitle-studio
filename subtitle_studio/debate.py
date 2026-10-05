@@ -10,7 +10,9 @@ ROLES = {
 }
 
 
-def choose(cue: dict, neighbors: list[dict], chat: Callable, model: str, review_context: str = "") -> dict:
+def choose(cue: dict, neighbors: list[dict], chat: Callable, model: str, review_context: str = "", agent_count: int = 2) -> dict:
+    if agent_count not in (1, 2):
+        raise ValueError("Review requires one or two agents")
     candidates = cue["candidates"]
     ids = [c["id"] for c in candidates]
     if len(ids) < 2:
@@ -47,6 +49,9 @@ def choose(cue: dict, neighbors: list[dict], chat: Callable, model: str, review_
 
     votes = []
     try:
+        if agent_count == 1:
+            judgment = vote("context", 1)
+            return {"selected": judgment["candidate_id"], "status": "single_review", "votes": [judgment], "rounds": 1}
         initial = [vote(role, 1) for role in ROLES]
         votes.extend(initial)
         final = initial

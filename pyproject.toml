@@ -10,9 +10,9 @@ requires-python = ">=3.12,<3.13"
 dependencies = ["fastapi", "uvicorn", "pydantic>=2", "numpy", "scipy", "soundfile", "httpx", "huggingface-hub"]
 
 [project.optional-dependencies]
-ai = ["faster-whisper", "silero-vad", "speechbrain", "qwen-asr", "whisperx"]
+ai = ["faster-whisper", "silero-vad", "speechbrain", "whisperx"]
 test = ["pytest", "pytest-asyncio"]
-benchmark = ["pyarrow", "sentencepiece"]
+benchmark = ["pyarrow"]
 
 [tool.setuptools.packages.find]
 include = ["subtitle_studio*"]

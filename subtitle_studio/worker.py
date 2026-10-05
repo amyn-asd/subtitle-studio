@@ -13,17 +13,11 @@ import numpy as np
 
 from .config import DATA, MODELS
 from .media import audio_window
-from .models import model_path, model_ready
+from .models import model_path, model_ready, model_revision
 from .subtitles import atomic_text
 from .audio_processing import prepare_track
 from .speech_coverage import uncovered_speech, repetitive_text
 
-QWEN_LANGUAGES = {"zh": "Chinese", "en": "English", "yue": "Cantonese", "ar": "Arabic", "de": "German",
-                  "fr": "French", "es": "Spanish", "pt": "Portuguese", "id": "Indonesian", "it": "Italian",
-                  "ko": "Korean", "ru": "Russian", "th": "Thai", "vi": "Vietnamese", "ja": "Japanese",
-                  "tr": "Turkish", "hi": "Hindi", "ms": "Malay", "nl": "Dutch", "sv": "Swedish", "da": "Danish",
-                  "fi": "Finnish", "pl": "Polish", "cs": "Czech", "fil": "Filipino", "tl": "Filipino", "fa": "Persian",
-                  "el": "Greek", "hu": "Hungarian", "mk": "Macedonian", "ro": "Romanian"}
 _dll_handles = []
 
 
@@ -263,48 +257,41 @@ def primary(manifest):
         del audio
 
 
-def recheck(manifest, use_whisper=False):
+def recheck(manifest, use_whisper=True):
     settings, media = manifest["settings"], manifest["media"]
     cases = manifest["cases"]
     if not cases:
         return
-    torch = cuda()
-    if use_whisper:
-        model, _ = whisper_model(settings)
-    else:
-        from qwen_asr import Qwen3ASRModel
-        if not model_ready("qwen_asr"):
-            raise RuntimeError("Download Qwen3-ASR in Models before enabling recognition rechecks.")
-        model = Qwen3ASRModel.from_pretrained(str(model_path("qwen_asr")), dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
-                                            device_map="cuda:0", attn_implementation="sdpa",
-                                            max_inference_batch_size=1, max_new_tokens=384)
-    cache = Path(manifest["cache"]) / ("whisper-rechecks" if use_whisper else "qwen-rechecks")
+    model, _ = whisper_model({**settings, "preset": "accurate"})
+    cache = Path(manifest["cache"]) / "large-rechecks"
     cache.mkdir(parents=True, exist_ok=True)
+    beginning = min(settings.get("start_seconds", 0), media["duration"])
+    ending = min(media["duration"], beginning + (settings.get("limit_seconds") or media["duration"]))
+    prepared = {}
     for index, case in enumerate(cases):
         cue = case["cue"]
-        signature = hashlib.sha256(json.dumps(case, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
+        signature = hashlib.sha256(json.dumps({"case": case, "revision": model_revision("whisper"),
+            "audio_profile": settings.get("audio_profile", "level"), "protocol": 2},
+            sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
         file = cache / f"{cue['id']}-{signature}.json"
         if file.exists():
             result = json.loads(file.read_text(encoding="utf-8"))
         else:
-            start = max(0, cue["start"] - .12)
-            duration = min(media["duration"], cue["end"] + .12) - start
-            audio = audio_window(media["path"], cue["track"], start, duration)
+            track = cue["track"]
+            if track not in prepared:
+                prepared[track] = prepare_track(media["path"], track, beginning, ending - beginning,
+                    Path(manifest["cache"]) / f"audio-{track}.f32", settings.get("audio_profile", "level"))
+            start = max(beginning, cue["start"] - .12)
+            end = min(ending, cue["end"] + .12)
+            audio = np.asarray(prepared[track][round((start-beginning)*16000):round((end-beginning)*16000)])
             neighbors = case.get("neighbors", [])
             context = "\n".join(n["text"] for n in neighbors if not n.get("flags") or n.get("reviewed"))[-1500:]
-            if use_whisper:
-                segments, info = model.transcribe(audio, language=settings.get("language"),
-                                 word_timestamps=True, beam_size=5, condition_on_previous_text=False, temperature=(0, .2),
-                                 initial_prompt=context or None, vad_filter=True)
-                text = "".join(segment.text for segment in segments).strip()
-                detected_language = info.language
-            else:
-                recognized = model.transcribe(audio=(audio, 16000), context=context,
-                                 language=QWEN_LANGUAGES.get(settings.get("language")))
-                text = recognized[0].text.strip()
-                detected_language = next((code for code, name in QWEN_LANGUAGES.items() if name.lower() == recognized[0].language.lower()), cue["language"])
-            result = {"cue_id": cue["id"], "text": text, "engine": "Whisper contextual retry" if use_whisper else "Qwen3-ASR",
-                      "candidate_id": "whisper_retry" if use_whisper else "qwen", "language": detected_language, "start": start, "end": start + duration}
+            segments, info = model.transcribe(audio, language=settings.get("language"),
+                             word_timestamps=True, beam_size=5, condition_on_previous_text=False, temperature=(0, .2),
+                             initial_prompt=context or None, vad_filter=True)
+            text = "".join(segment.text for segment in segments).strip()
+            result = {"cue_id": cue["id"], "text": text, "engine": "Whisper large-v3 contextual retry",
+                      "candidate_id": "whisper_retry", "language": info.language, "start": start, "end": end}
             atomic_text(file, json.dumps(result, ensure_ascii=False))
         emit("recheck", result=result, progress=(index + 1) / len(cases), message=f"Checking uncertain speech {index + 1}/{len(cases)}")
 
@@ -312,6 +299,13 @@ def recheck(manifest, use_whisper=False):
 def align(manifest):
     import torch
     import whisperx
+    import whisperx.alignment as alignment_module
+    # Cue boundaries already define the subtitle span. Avoid downloading an
+    # unrelated sentence tokenizer, and retain the complete recognized text.
+    class WholeCue:
+        def span_tokenize(self, text):
+            return [(0, len(text))]
+    alignment_module.nltk_load = lambda _: WholeCue()
     torch.set_num_threads(4)
     by_language = {}
     for cue in manifest["cues"]:
@@ -319,7 +313,19 @@ def align(manifest):
     done = 0
     for language, cues in by_language.items():
         try:
-            model, metadata = whisperx.load_align_model(language_code=language, device="cpu", model_dir=str(MODELS / "alignment"))
+            from whisperx.alignment import DEFAULT_ALIGN_MODELS_HF
+            repository = DEFAULT_ALIGN_MODELS_HF.get(language)
+            local_model = None
+            if repository:
+                snapshots = MODELS / "alignment" / ('models--' + repository.replace('/', '--')) / 'snapshots'
+                if snapshots.is_dir():
+                    for snapshot in sorted(snapshots.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+                        if ((snapshot/'config.json').is_file() and (snapshot/'vocab.json').is_file()
+                            and ((snapshot/'pytorch_model.bin').is_file() or (snapshot/'model.safetensors').is_file())):
+                            local_model = str(snapshot)
+                            break
+            model, metadata = whisperx.load_align_model(language_code=language, device="cpu",
+                model_name=local_model, model_dir=str(MODELS / "alignment"))
         except Exception as exc:
             emit("warning", message=f"Word alignment unavailable for {language}: {exc}")
             continue

@@ -1,5 +1,7 @@
 # ASR comparison on a Persian recording
 
+**Historical experiment:** Qwen ASR and both OmniASR variants were retired after this comparison. Their weights are outside the active model folder, and their application/benchmark adapters have been removed. The supported recognizers are Whisper Turbo and large-v3.
+
 On this recording, tuned Whisper Turbo remains the strongest speed/accuracy compromise. OmniASR LLM 3B v2 produced the smallest edit distance against the supplied transcript, but improved word error by only **1.13 percentage points** while taking **5.59 times longer**. This is one recording and one measured full run per model, not a general language ranking.
 
 The full recording is **962.64 seconds** (16 minutes 3 seconds). The supplied reference contains **2,664 normalized words**. All five models received the identical prepared waveform: its SHA-256 was checked across the five runs. No model received the reference, a transcript prompt, scene context, another model's output, or a text reviewer. There was no translation.
@@ -54,7 +56,7 @@ Whisper, Qwen and Omni LLM used deterministic beam size 5. CTC used its architec
 
 ## Reproduce the alternative runs
 
-These are benchmark scripts; the GUI continues to use its existing recognition pipeline. Install the optional AI/benchmark dependencies into the project environment, with a compatible CUDA PyTorch/torchaudio installation. The measured environment used torch 2.11.0+cu128, transformers 4.57.6, qwen-asr 0.0.6, whisperx 3.7.2, faster-whisper 1.2.1 and pyarrow 23.0.1.
+The commands below document the original experiment and refer to scripts retained in Git history at commit `b0c4843`. They are no longer present in the current checkout. Install the optional AI/benchmark dependencies into the project environment, with a compatible CUDA PyTorch/torchaudio installation. The measured environment used torch 2.11.0+cu128, transformers 4.57.6, qwen-asr 0.0.6, whisperx 3.7.2, faster-whisper 1.2.1 and pyarrow 23.0.1.
 
 Keep checkpoints outside Git. For Meta, the model directory needs the selected official `omniASR-CTC-3B-v2.pt` or `omniASR-LLM-3B-v2.pt`, `omniASR_tokenizer_written_v2.model`, and (LLM only) the official `languges_lookup_table.parquet`. The published [model cards](https://github.com/facebookresearch/omnilingual-asr/blob/81f51e224ce9e74b02cc2a3eaf21b2d91d743455/src/omnilingual_asr/cards/models/rc_models_v2.yaml) and [language table](https://github.com/facebookresearch/omnilingual-asr/blob/81f51e224ce9e74b02cc2a3eaf21b2d91d743455/src/omnilingual_asr/models/wav2vec2_llama/languges_lookup_table.parquet) identify the assets. Qwen needs a local Qwen3-ASR-1.7B snapshot. The aligner argument points to a complete local `jonatasgrosman/wav2vec2-large-xlsr-53-persian` snapshot.
 
@@ -70,7 +72,7 @@ Example with generic paths:
 
 Use `--model qwen` or `--model omni-ctc` with `--batch 4` and the appropriate model directory. Output directories must be new. The script writes local SRT/TXT/metrics and creates an additional `.audio-tuned-<model>.srt` beside the source. An existing sidecar is preserved; the new output remains available in the benchmark directory. References are read only after timed inference has finished. These scripts fix the recognition language to Persian for this comparison.
 
-The [machine-readable report](ASR_MODEL_BENCHMARK.json) contains full numeric results, phase timing, model revisions, checkpoint hashes and method limitations. Source media, supplied reference, raw dialogue, subtitles and model weights remain local. Four optional mathematical adapter checks are in `tests/test_omni_benchmark_port.py`; they run when the AI dependencies are installed.
+The [machine-readable report](ASR_MODEL_BENCHMARK.json) contains full numeric results, phase timing, model revisions, checkpoint hashes and method limitations. Source media, supplied reference, raw dialogue, subtitles and model weights remain local. The four optional adapter checks passed for the experiment and are retained in the same Git history.
 
 ## Publisher sources
 

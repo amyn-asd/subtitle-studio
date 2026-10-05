@@ -1,0 +1,160 @@
+{
+  "date": "2026-10-06",
+  "source": "Private Persian recording A",
+  "source_duration_seconds": 962.639773,
+  "reference_words": 2664,
+  "reference_used_only_for_scoring": true,
+  "independent_listening_ground_truth_verified": false,
+  "hardware": {
+    "gpu": "NVIDIA GeForce RTX 5080",
+    "gpu_memory_mib": 16303,
+    "os": "Windows",
+    "python": "3.12"
+  },
+  "baseline": {
+    "model": "Whisper large-v3 Turbo",
+    "revision": "41f01f3fe87f28c78e2fbf8b568835947dd65ed9",
+    "reused_measured_output": true,
+    "normalized_words": 2623,
+    "word_edits": 920,
+    "seconds": 39.115280600000006
+  },
+  "shared_candidates": {
+    "model": "Whisper large-v3",
+    "revision": "edaa852ec7e145841d8ffdb056a99866b5f0a478",
+    "seconds": 52.082123900001534,
+    "rechecked_cues": 70,
+    "reviewable_cues": 68,
+    "audio_sha256": "40a75686337bfd9cdcb69558235b9dbaadbd25757312676f1b21f41ec06c3801",
+    "same_audio_as_turbo": true,
+    "flagged_cues_only": true,
+    "reference_prompt": false
+  },
+  "reviewers": {
+    "model": "qwen3.5:9b",
+    "digest": "56671c2ab9385f9cfcb404638e32cd62d88e3501d44822208363c010179a3c90",
+    "temperature": 0,
+    "think": false,
+    "num_ctx": 8192,
+    "num_predict": 768,
+    "one_agent_role": "context",
+    "two_agent_roles": [
+      "recognition",
+      "context"
+    ],
+    "max_rounds": 2,
+    "max_calls_per_cue": 4,
+    "direct_audio_access": false,
+    "candidate_selection_only": true,
+    "video_context": "",
+    "identical_candidate_and_neighbor_snapshot": true,
+    "new_private_server_and_unloaded_model_per_mode": true
+  },
+  "timings": {
+    "total": "sum of measured Turbo + shared candidate preparation + review + replacement-word alignment",
+    "cue_boundaries_unchanged": true,
+    "srt_timestamps_valid": true,
+    "word_alignment_cpu": true,
+    "excluded": [
+      "Reference scoring",
+      "Export",
+      "Process startup",
+      "Post-review model cleanup"
+    ],
+    "limitations": [
+      "One measured run per review mode",
+      "Sequential 1 then 2 agents",
+      "OS/driver caches not flushed",
+      "The first single-agent call took 62.17 seconds; the first two-agent call took 4.11 seconds, so startup/caching affected timing"
+    ]
+  },
+  "metric": {
+    "word_error": "100 * (substitutions + deletions + insertions) / 2664",
+    "reference_accuracy": "100 - word_error",
+    "normalization": "Same transcript_metrics.py normalization as the ASR comparison; not semantic comprehension accuracy"
+  },
+  "results": [
+    {
+      "agent_count": 0,
+      "total_seconds": 39.115280600000006,
+      "review_seconds": 0.0,
+      "candidate_preparation_seconds": 0.0,
+      "alignment_seconds": 0.0,
+      "changed_cues": 0,
+      "llm_calls": 0,
+      "failed_cues": 0,
+      "disagreement_cues": 0,
+      "unresolved_cues": 0,
+      "output_words": 2623,
+      "minimum_word_edits": 920,
+      "reference_edit_percent": 34.53453453453454,
+      "matches": 1873,
+      "substitutions": 621,
+      "deletions": 170,
+      "insertions": 129,
+      "reference_accuracy_percent": 65.46546546546546
+    },
+    {
+      "agent_count": 1,
+      "total_seconds": 373.4505635000014,
+      "review_seconds": 233.56998530000055,
+      "candidate_preparation_seconds": 52.082123900001534,
+      "alignment_seconds": 48.683173699999315,
+      "reviewable_cues": 68,
+      "changed_cues": 55,
+      "llm_calls": 68,
+      "disagreement_cues": 0,
+      "unresolved_cues": 0,
+      "failed_cues": 2,
+      "initial_vote_pairs": 0,
+      "alignment_warnings": [],
+      "timings_unchanged": true,
+      "output_words": 2591,
+      "minimum_word_edits": 949,
+      "reference_edit_percent": 35.62312312312312,
+      "matches": 1858,
+      "substitutions": 590,
+      "deletions": 216,
+      "insertions": 143,
+      "call_timing_seconds": {
+        "first": 62.167321199998696,
+        "median": 2.171923750001042,
+        "minimum": 1.2791376000004675,
+        "maximum": 62.167321199998696,
+        "sum": 230.5190947999963
+      },
+      "reference_accuracy_percent": 64.37687687687688
+    },
+    {
+      "agent_count": 2,
+      "total_seconds": 610.6564384000021,
+      "review_seconds": 508.5118093000001,
+      "candidate_preparation_seconds": 52.082123900001534,
+      "alignment_seconds": 10.947224600000482,
+      "reviewable_cues": 68,
+      "changed_cues": 7,
+      "llm_calls": 244,
+      "disagreement_cues": 54,
+      "unresolved_cues": 27,
+      "failed_cues": 0,
+      "initial_vote_pairs": 68,
+      "alignment_warnings": [],
+      "timings_unchanged": true,
+      "output_words": 2620,
+      "minimum_word_edits": 923,
+      "reference_edit_percent": 34.647147147147145,
+      "matches": 1872,
+      "substitutions": 617,
+      "deletions": 175,
+      "insertions": 131,
+      "call_timing_seconds": {
+        "first": 4.107406699999046,
+        "median": 1.9399978499995996,
+        "minimum": 1.222065100000691,
+        "maximum": 6.738067000000228,
+        "sum": 505.61377009999524
+      },
+      "reference_accuracy_percent": 65.35285285285286
+    }
+  ]
+}
